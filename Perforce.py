@@ -44,6 +44,17 @@ class PerforceP4CONFIGHandler(sublime_plugin.EventListener):
 # Executed at startup to store the path of the plugin... necessary to open files relative to the plugin
 perforceplugin_dir = os.getcwdu()
 
+PERFORCE_SETTINGS_PATH = 'Perforce.sublime-settings'
+PERFORCE_ENVIRONMENT_VARIABLES = ('P4PORT', 'P4CLIENT', 'P4USER', 'P4PASSWD')
+
+
+def load_settings():
+    return sublime.load_settings(PERFORCE_SETTINGS_PATH)
+
+
+def save_settings(settings):
+    settings.save(PERFORCE_SETTINGS_PATH)
+
 
 def main_thread(callback, *args, **kwargs):
     # sublime.set_timeout gets used to send things onto the main thread
@@ -102,6 +113,20 @@ class PerforceCommand(object):
         if sublime.platform == 'osx':
             command = 'source ~/.bash_profile && %s' % command
 
+        # Get p4-related variables from plugin preferences.
+        settings = load_settings()
+        environ = os.environ
+        for name in PERFORCE_ENVIRONMENT_VARIABLES:
+            value = settings.get(name)
+            if value:
+                environ[name] = value
+
+        # Override enviroment variables with values from plugin preferences.
+        if 'env' in kwargs:
+            kwargs['env'].update(environ)
+        else:
+            kwargs['env'] = environ
+
         thread = CommandThread(command, callback, **kwargs)
         thread.start()
         ThreadProgress(thread, message)
@@ -123,29 +148,9 @@ def ConstructCommand(in_command):
     command = ''
     if(sublime.platform() == "osx"):
         command = 'source ~/.bash_profile && '
-    # Revert change until threading is fixed
-    # command = getPerforceConfigFromPreferences(command)
     command += in_command
     return command
 
-def getPerforceConfigFromPreferences(command):
-    perforce_settings = sublime.load_settings('Perforce.sublime-settings')
-
-    # check to see if the sublime preferences include the given p4 config
-    # if it does, then add it to the command in the form "var=value command"
-    # so that they get inserted into the environment the command runs in
-    def addP4Var(command, var):
-        p4var = perforce_settings.get(var)
-        if p4var:
-            if sublime.platform() == "windows":
-                return command + "SET " + var + "=" + p4var + " && "
-            return command + var + "=" + p4var + " "
-        return command
-    command = addP4Var(command, "P4PORT")
-    command = addP4Var(command, "P4CLIENT")
-    command = addP4Var(command, "P4USER")
-    command = addP4Var(command, "P4PASSWD")
-    return command
 
 def GetUserFromClientspec():
     command = ConstructCommand('p4 info')
