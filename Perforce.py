@@ -25,10 +25,11 @@ import sublime_plugin
 import functools
 import json
 import os
-import stat
+import re
 import subprocess
 import tempfile
 import threading
+import unittest
 
 # Plugin Settings are located in 'perforce.sublime-settings' make a copy in the User folder to keep changes
 
@@ -46,6 +47,7 @@ perforceplugin_dir = os.getcwdu()
 
 PERFORCE_SETTINGS_PATH = 'Perforce.sublime-settings'
 PERFORCE_ENVIRONMENT_VARIABLES = ('P4PORT', 'P4CLIENT', 'P4USER', 'P4PASSWD')
+P4INFO_USERNAME_RE = re.compile(r'^User name: (?P<username>.+)$', re.MULTILINE)
 
 
 def load_settings():
@@ -62,6 +64,10 @@ def main_thread(callback, *args, **kwargs):
     sublime.set_timeout(functools.partial(callback, *args, **kwargs), 0)
 
 
+def is_writable(path):
+    return os.access(path, os.W_OK)
+
+
 class ThreadProgress(object):
     def __init__(self, thread, message):
         self.thread = thread
@@ -72,6 +78,7 @@ class ThreadProgress(object):
 
     def run(self, i):
         if not self.thread.is_alive():
+            main_thread(sublime.status_message, '')
             return
 
         before = i % self.size
@@ -127,12 +134,14 @@ class PerforceCommand(object):
         else:
             kwargs['env'] = environ
 
-        thread = CommandThread(command, callback, **kwargs)
+        thread = CommandThread(command,
+            functools.partial(self.check_output, callback), **kwargs)
         thread.start()
         ThreadProgress(thread, message)
 
-    def generic_done(self, result):
-        pass
+    def check_output(self, callback, output):
+        # TODO: implement
+        callback(output)
 
 
 class PerforceWindowCommand(PerforceCommand, sublime_plugin.WindowCommand):
@@ -143,38 +152,52 @@ class PerforceTextCommand(PerforceCommand, sublime_plugin.TextCommand):
     pass
 
 
-# Utility functions
-def ConstructCommand(in_command):
-    command = ''
-    if(sublime.platform() == "osx"):
-        command = 'source ~/.bash_profile && '
-    command += in_command
-    return command
+def p4(*args, **kwargs):
+    PerforceCommand().run_command(*args, **kwargs)
 
 
-def GetUserFromClientspec():
-    command = ConstructCommand('p4 info')
-    p = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, cwd=global_folder, shell=True)
-    result, err = p.communicate()
+def get_current_user(return_callback):
 
-    if(err):
-        WarnUser("usererr " + err.strip())
-        return -1
+    def extract_username(callback, output):
+        match = P4INFO_USERNAME_RE.search(output)
+        if match:
+            # TODO: remove strip
+            callback(match.groupdict()['username'].strip())
+        else:
+            # TODO: handle
+            pass
 
-    # locate the line containing "User name: " and extract the following name
-    startindex = result.find("User name: ")
-    if(startindex == -1):
-        WarnUser("Unexpected output from 'p4 info'.")
-        return -1
+    p4('p4 info',
+        callback=functools.partial(extract_username, return_callback))
 
-    startindex += 11 # advance after 'User name: '
 
-    endindex = result.find("\n", startindex)
-    if(endindex == -1):
-        WarnUser("Unexpected output from 'p4 info'.")
-        return -1
+def get_pending_changelists(return_callback):
 
-    return result[startindex:endindex].strip();
+    def get_raw_changes(username):
+
+        def parse(callback, output):
+            # TODO: cleanup output
+            callback(output.splitlines())
+
+        p4('p4 changes -s pending -u %s' % username,
+             callback=functools.partial(parse, return_callback))
+
+    get_current_user(return_callback=get_raw_changes)
+
+
+def get_client_root(return_callback):
+    # TODO: implement
+    return_callback('foo')
+
+
+def is_under_client_root(candidate, return_callback):
+
+    def check(root):
+        path, root = map(os.path.normpath, [candidate, root])
+        return_callback(root == os.path.commonprefix([path, root]))
+
+    get_client_root(return_callback=check)
+
 
 def GetClientRoot(in_dir):
     # check if the file is in the depot
@@ -209,23 +232,6 @@ def GetClientRoot(in_dir):
     return convertedclientroot
 
 
-def IsFolderUnderClientRoot(in_folder):
-    # check if the file is in the depot
-    clientroot = GetClientRoot(in_folder)
-    if(clientroot == -1):
-        return 0
-
-    clientroot = clientroot.lower()
-
-    # convert all paths to "os.sep" slashes
-    convertedfolder = in_folder.lower().replace('\\', os.sep).replace('/', os.sep);
-    clientrootindex = convertedfolder.find(clientroot);
-
-    if(clientrootindex == -1):
-        return 0
-
-    return 1
-
 def IsFileInDepot(in_folder, in_filename):
     isUnderClientRoot = IsFolderUnderClientRoot(in_folder);
     if(os.path.isfile(os.path.join(in_folder, in_filename))): # file exists on disk, not being added
@@ -239,19 +245,6 @@ def IsFileInDepot(in_folder, in_filename):
         else:
             return 0
 
-def GetPendingChangelists():
-    # Launch p4 changes to retrieve all the pending changelists
-    currentuser = GetUserFromClientspec()
-    if(currentuser == -1):
-        return 0, "Unexpected output from 'p4 info'."
-
-    command = ConstructCommand('p4 changes -s pending -u ' + currentuser)
-
-    p = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, cwd=global_folder, shell=True)
-    result, err = p.communicate()
-    if(not err):
-        return 1, result
-    return 0, result
 
 def AppendToChangelistDescription(changelist, input):
     # First, create an empty changelist, we will then get the cl number and set the description
@@ -327,19 +320,6 @@ def LogResults(success, message):
         print "Perforce: " + message
     else:
         WarnUser(message);
-
-def IsFileWritable(in_filename):
-    if(not in_filename):
-        return 0
-
-    # if it doesn't exist, it's "writable"
-    if(not os.path.isfile(in_filename)):
-        return 1
-
-    filestats = os.stat(in_filename)[0];
-    if(filestats & stat.S_IWRITE):
-        return 1
-    return 0
 
 # Checkout section
 def Checkout(in_filename):
@@ -1101,3 +1081,20 @@ class ShelveClCommand(threading.Thread):
                 resultchangelists.insert(0, "Changelist " + changelistlinesplit[1] + " - " + ' '.join(changelistlinesplit[7:]))
 
         return resultchangelists
+
+
+class PerforceTestCase(unittest.TestCase):
+    def test_test(self):
+        def on_done(result):
+            print (result,)
+
+        is_under_client_root('asdas', on_done)
+
+
+class PerforceRunUnitTests(sublime_plugin.WindowCommand):
+    def run(self):
+        tests = [
+            'test_test',
+        ]
+        suite = unittest.TestSuite(map(PerforceTestCase, tests))
+        unittest.TextTestRunner(verbosity=2).run(suite)
