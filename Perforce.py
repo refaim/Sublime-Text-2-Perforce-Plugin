@@ -22,17 +22,14 @@
 import sublime
 import sublime_plugin
 
+import functools
+import json
 import os
 import stat
 import subprocess
 import tempfile
 import threading
-import json
-import sys
-try:
-    from Queue import Queue, Empty
-except ImportError:
-    from queue import Queue, Empty  # python 3.x
+
 # Plugin Settings are located in 'perforce.sublime-settings' make a copy in the User folder to keep changes
 
 # global variable used when calling p4 - it stores the path of the file in the current view, used to determine with P4CONFIG to use
@@ -46,6 +43,80 @@ class PerforceP4CONFIGHandler(sublime_plugin.EventListener):
 
 # Executed at startup to store the path of the plugin... necessary to open files relative to the plugin
 perforceplugin_dir = os.getcwdu()
+
+
+def main_thread(callback, *args, **kwargs):
+    # sublime.set_timeout gets used to send things onto the main thread
+    # most sublime.[something] calls need to be on the main thread
+    sublime.set_timeout(functools.partial(callback, *args, **kwargs), 0)
+
+
+class ThreadProgress(object):
+    def __init__(self, thread, message):
+        self.thread = thread
+        self.message = message
+        self.addend = 1
+        self.size = 8
+        sublime.set_timeout(lambda: self.run(0), 100)
+
+    def run(self, i):
+        if not self.thread.is_alive():
+            return
+
+        before = i % self.size
+        after = (self.size - 1) - before
+        sublime.status_message('%s [%s=%s]' % \
+            (self.message, ' ' * before, ' ' * after))
+        if not before:
+            self.addend = 1
+        elif not after:
+            self.addend = -1
+        i += self.addend
+        sublime.set_timeout(lambda: self.run(i), 100)
+
+
+class CommandThread(threading.Thread):
+    def __init__(self, command, on_done, **kwargs):
+        threading.Thread.__init__(self)
+        self.command = command
+        self.on_done = on_done
+        self.stdin = kwargs.get('stdin', None)
+        self.stdout = kwargs.get('stdout', subprocess.PIPE)
+        self.cwd = kwargs.get('cwd', global_folder)
+        self.env = kwargs.get('env') or os.environ
+
+    def run(self):
+        process = subprocess.Popen(self.command,
+            stdout=self.stdout, stderr=subprocess.STDOUT,
+            stdin=subprocess.PIPE, cwd=self.cwd, env=self.env,
+            shell=True, universal_newlines=True)
+        output = process.communicate(self.stdin)[0] or ''
+        main_thread(self.on_done, output)
+
+
+class PerforceCommand(object):
+    def run_command(self, command, callback=None, **kwargs):
+        message = kwargs.get('status_message', command)
+        callback = callback or self.generic_done
+
+        if sublime.platform == 'osx':
+            command = 'source ~/.bash_profile && %s' % command
+
+        thread = CommandThread(command, callback, **kwargs)
+        thread.start()
+        ThreadProgress(thread, message)
+
+    def generic_done(self, result):
+        pass
+
+
+class PerforceWindowCommand(PerforceCommand, sublime_plugin.WindowCommand):
+    pass
+
+
+class PerforceTextCommand(PerforceCommand, sublime_plugin.TextCommand):
+    pass
+
 
 # Utility functions
 def ConstructCommand(in_command):
