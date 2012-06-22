@@ -1,4 +1,5 @@
 # TODO: comment file sections
+# TODO: rename return_callback to callback?
 
 # Written by Eric Martel (emartel@gmail.com / www.ericmartel.com)
 
@@ -61,6 +62,13 @@ PERFORCE_P4_OUTPUT_PREFIXES = (
 )
 
 PERFORCE_P4_DIFF_HEADER_RE = re.compile(r'^={4}.+={4}$')
+PERFORCE_P4_PENDING_CL_RE = re.compile(
+    r'''^Change\s
+       (?P<number>\d+)\son\s
+       (?P<date>\S+)\sby\s
+       (?P<author>\S+)\s\*pending\*\s
+       '(?P<description>.+)\s'$
+    ''', re.VERBOSE)
 
 PERFORCE_P4_CLIENT_ERROR_MESSAGE = 'Perforce client error'
 
@@ -253,6 +261,9 @@ class PerforceCommand(object):
         self.active_window().run_command('show_panel',
             {'panel': 'output.perforce'})
 
+    def quick_panel(self, *args, **kwargs):
+        self.active_window().show_quick_panel(*args, **kwargs)
+
 
 class PerforceWindowCommand(PerforceCommand, sublime_plugin.WindowCommand):
     def active_view(self):
@@ -299,8 +310,15 @@ def get_pending_changelists(return_callback):
     def get_raw_changes(username):
 
         def parse(callback, output):
-            # TODO: cleanup output
-            callback(output.splitlines())
+            parsed = []
+            for cl in output.splitlines():
+                match = PERFORCE_P4_PENDING_CL_RE.match(cl)
+                if match:
+                    parsed.append(match.groupdict())
+                else:
+                    # TODO: handle
+                    raise
+            callback(parsed)
 
         p4(['changes', '-s', 'pending', '-u', username],
              callback=functools.partial(parse, return_callback))
@@ -313,6 +331,7 @@ def get_client_root(return_callback):
     def get_value(callback, info_dict):
         client_root = info_dict.get('client_root', None)
         if client_root is None:
+            # TODO: don't show error message
             main_thread(sublime.error_message,
                 "Perforce: Please configure clientspec. Launching 'p4 client'...")
             p4(['client'])
@@ -423,6 +442,30 @@ class PerforceCheckoutCommand(PerforceTextCommand):
             self.panel(result)
 
 
+class PerforceSubmitCommand(PerforceWindowCommand):
+    def run(self):
+        get_pending_changelists(return_callback=self.changelists_recieved)
+
+    def changelists_recieved(self, changelists):
+        if changelists:
+            self.changelists = changelists
+            format = '%(number)s - %(description)s'
+            self.quick_panel([(format % cl) for cl in changelists],
+                self.on_pick)
+        else:
+            self.panel('There are no pending changelists')
+
+    def on_pick(self, picked):
+        if picked != -1:
+            number = self.changelists[picked]['number']
+            self.run_command(['submit', '-c', number],
+                callback=self.submit_done)
+
+    def submit_done(self, result):
+        # TODO: handle 'No files to submit' in check_output()
+        self.panel(result)
+
+
 def IsFileInDepot(in_folder, in_filename):
     isUnderClientRoot = IsFolderUnderClientRoot(in_folder);
     if(os.path.isfile(os.path.join(in_folder, in_filename))): # file exists on disk, not being added
@@ -514,6 +557,7 @@ def LogResults(success, message):
 
 class PerforceAutoCheckout(sublime_plugin.EventListener):
     def on_modified(self, view):
+        return
         if(not view.file_name()):
             return
 
@@ -531,6 +575,7 @@ class PerforceAutoCheckout(sublime_plugin.EventListener):
             LogResults(success, message);
 
     def on_pre_save(self, view):
+        return
         perforce_settings = sublime.load_settings('Perforce.sublime-settings')
 
         # check if this part of the plugin is enabled
@@ -977,64 +1022,6 @@ class AddLineToChangelistDescriptionThread(threading.Thread):
 class PerforceAddLineToChangelistDescriptionCommand(sublime_plugin.WindowCommand):
     def run(self):
         AddLineToChangelistDescriptionThread(self.window).start()
-
-# Submit section
-class SubmitThread(threading.Thread):
-    def __init__(self, window):
-        self.window = window
-        self.view = window.active_view()
-        threading.Thread.__init__(self)
-
-    def MakeChangelistsList(self):
-        success, rawchangelists = GetPendingChangelists();
-
-        resultchangelists = [];
-
-        if(success):
-            changelists = rawchangelists.splitlines()
-
-            # for each line, extract the change
-            for changelistline in changelists:
-                changelistlinesplit = changelistline.split(' ')
-
-                # Insert at two because we receive the changelist in the opposite order and want to keep new and default on top
-                resultchangelists.insert(2, "Changelist " + changelistlinesplit[1] + " - " + ' '.join(changelistlinesplit[7:]))
-
-        return resultchangelists
-
-    def run(self):
-        self.changelists_list = self.MakeChangelistsList()
-
-        def show_quick_panel():
-            if not self.changelists_list:
-                sublime.error_message(__name__ + ': There are no changelists to list.')
-                return
-            self.window.show_quick_panel(self.changelists_list, self.on_done)
-
-        sublime.set_timeout(show_quick_panel, 10)
-
-    def on_done(self, picked):
-        if picked == -1:
-            return
-        changelist = self.changelists_list[picked]
-        changelistsections = changelist.split(' ')
-
-        # Check in the selected changelist
-        command = ConstructCommand('p4 submit -c ' + changelistsections[1]);
-        p = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, cwd=global_folder, shell=True)
-        result, err = p.communicate()
-
-    def on_description_change(self, input):
-        pass
-
-    def on_description_cancel(self):
-        pass
-
-class PerforceSubmitCommand(sublime_plugin.WindowCommand):
-    def run(self):
-        SubmitThread(self.window).start()
-
-
 
 class PerforceLogoutCommand(sublime_plugin.WindowCommand):
     def run(self):
