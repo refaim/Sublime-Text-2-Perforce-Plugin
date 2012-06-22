@@ -27,6 +27,7 @@ import sublime_plugin
 import functools
 import json
 import os
+import re
 import subprocess
 import tempfile
 import threading
@@ -48,8 +49,20 @@ perforceplugin_dir = os.getcwdu()
 
 PERFORCE_SETTINGS_PATH = 'Perforce.sublime-settings'
 PERFORCE_ENVIRONMENT_VARIABLES = ('P4PORT', 'P4CLIENT', 'P4USER', 'P4PASSWD')
+
 PERFORCE_P4_ERROR_PREFIX = 'error'
+PERFORCE_P4_OUTPUT_PREFIXES = (
+    PERFORCE_P4_ERROR_PREFIX,
+    'info',
+    'info1',
+    'info2',
+    'text',
+)
+
+PERFORCE_DIFF_HEADER_RE = re.compile(r'^={4}.+={4}$')
+
 PERFORCE_P4_CLIENT_ERROR_MESSAGE = 'Perforce client error'
+
 PERFORCE_P4_OUTPUT_START_MESSAGE = 'P4 OUTPUT START'
 PERFORCE_P4_OUTPUT_END_MESSAGE = 'P4 OUTPUT END'
 
@@ -126,9 +139,10 @@ class PerforceCommand(object):
     def run_command(self, command, callback=None, **kwargs):
         # TODO: what if p4 is not in path?
         command = ['p4', '-s'] + command
-        message = kwargs.get('status_message', ' '.join(command))
-        callback = callback or self.generic_done
         self.verbose = kwargs.get('verbose', False)
+        self.command = ' '.join(command)
+        message = kwargs.get('status_message', self.command)
+        callback = callback or self.generic_done
 
         if sublime.platform == 'osx':
             command = ['source', '~/.bash_profile', '&&'] + command
@@ -161,40 +175,95 @@ class PerforceCommand(object):
         if not p4_failed:
             cleaned = []
             for line in output.splitlines()[:-1]:  # skip line 'exit: <number>'
-                prefix, _, message = line.partition(':')
-                p4_failed = prefix == PERFORCE_P4_ERROR_PREFIX
-                cleaned.append(message.lstrip())
+                if any(line.startswith(prefix) for prefix in PERFORCE_P4_OUTPUT_PREFIXES):
+                    prefix, _, message = line.partition(':')
+                    p4_failed = prefix == PERFORCE_P4_ERROR_PREFIX
+                    cleaned.append(message.lstrip())
+                else:
+                    cleaned.append(line)
             output = '\n'.join(cleaned)
 
         if p4_failed or retcode != 0:
-            self.print_output(output)
+            self._print_p4_output(output)
             main_thread(sublime.status_message,
                 'Something went wrong, see console for details')
         else:
             if self.verbose:
-                self.print_output(output)
+                self._print_p4_output(output)
             callback(output)
 
-    def print_output(self, output):
+    def _print_p4_output(self, output):
 
         def wrap(message, length=80):
             return (' %s ' % message).center(length, '-')
 
-        print wrap(PERFORCE_P4_OUTPUT_START_MESSAGE)
-        print output
-        print wrap(PERFORCE_P4_OUTPUT_END_MESSAGE)
+        print '\n' + '\n'.join((
+            self.command,
+            wrap(PERFORCE_P4_OUTPUT_START_MESSAGE),
+            output,
+            wrap(PERFORCE_P4_OUTPUT_END_MESSAGE)
+        ))
 
     def generic_done(self, output):
         pass
 
+    def _output_to_view(self, output_file, output, clear=False,
+            syntax='Packages/Diff/Diff.tmLanguage'):
+        output_file.set_syntax_file(syntax)
+        edit = output_file.begin_edit()
+        if clear:
+            region = sublime.Region(0, self.output_view.size())
+            output_file.erase(edit, region)
+        output_file.insert(edit, 0, output)
+        output_file.end_edit(edit)
+
+    def scratch(self, output, title='', **kwargs):
+        scratch_file = self.active_window().new_file()
+        if title:
+            scratch_file.set_name(title)
+        scratch_file.set_scratch(True)
+        self._output_to_view(scratch_file, output, **kwargs)
+        scratch_file.set_read_only(True)
+        return scratch_file
+
+    def panel(self, output, **kwargs):
+        if not hasattr(self, 'output_view'):
+            self.output_view = self.active_window().get_output_panel('perforce')
+        self.output_view.set_read_only(False)
+        self._output_to_view(self.output_view, output, clear=True, **kwargs)
+        self.output_view.set_read_only(True)
+        self.active_window().run_command('show_panel',
+            {'panel': 'output.perforce'})
+
 
 class PerforceWindowCommand(PerforceCommand, sublime_plugin.WindowCommand):
-    pass
+    def active_view(self):
+        return self.window.active_view()
+
+    def active_window(self):
+        return self.window
 
 
 class PerforceTextCommand(PerforceCommand, sublime_plugin.TextCommand):
     def active_view(self):
         return self.view
+
+    def active_window(self):
+        return self.view.window() or sublime.active_window()
+
+    def check_depot_file(self, return_callback):
+        def root_check_done(filename, is_in_depot):
+            if is_in_depot:
+                return_callback(filename)
+            else:
+                display_message('File is not under the client root')
+
+        filename = self.active_view().file_name()
+        if filename:
+            is_under_client_root(filename,
+                return_callback=functools.partial(root_check_done, filename))
+        else:
+            display_message('View does not contain a file')
 
 
 def p4(*args, **kwargs):
@@ -260,19 +329,26 @@ def is_under_client_root(candidate, return_callback):
 
 class PerforceAddCommand(PerforceTextCommand):
     def run(self, edit):
+        self.check_depot_file(return_callback=self.check_done)
 
-        def add(filename, is_in_depot):
-            if is_in_depot:
-                self.run_command(['add', filename], verbose=True)
-            else:
-                display_message('File is not under the client root')
+    def check_done(self, filename):
+        self.run_command(['add', filename], verbose=True)
 
-        filename = self.active_view().file_name()
-        if filename:
-            is_under_client_root(filename,
-                return_callback=functools.partial(add, filename))
+
+class PerforceDiffCommand(PerforceTextCommand):
+    def run(self, edit):
+        self.check_depot_file(return_callback=self.check_done)
+
+    def check_done(self, filename):
+        self.run_command(['diff', filename], callback=self.diff_done)
+
+    def diff_done(self, result):
+        # TODO: show diff in output panel
+        if PERFORCE_DIFF_HEADER_RE.match(result):
+            self.panel('No output')
         else:
-            display_message('View does not contain a file')
+            self.scratch(result, title='Perforce Diff')
+
 
 
 def IsFileInDepot(in_folder, in_filename):
@@ -527,26 +603,6 @@ class PerforceRevertCommand(sublime_plugin.TextCommand):
                 success, message = Revert(folder_name, filename)
                 if(success): # the file was properly reverted, ask Sublime Text to refresh the view
                     self.view.run_command('revert');
-            else:
-                success = 0
-                message = "File is not under the client root."
-
-            LogResults(success, message)
-        else:
-            WarnUser("View does not contain a file")
-
-# Diff section
-def Diff(in_folder, in_filename):
-    # diff the file
-    return PerforceCommandOnFile("diff", in_folder, in_filename);
-
-class PerforceDiffCommand(sublime_plugin.TextCommand):
-    def run(self, edit):
-        if(self.view.file_name()):
-            folder_name, filename = os.path.split(self.view.file_name())
-
-            if(IsFileInDepot(folder_name, filename)):
-                success, message = Diff(folder_name, filename)
             else:
                 success = 0
                 message = "File is not under the client root."
