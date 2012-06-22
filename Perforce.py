@@ -1,3 +1,5 @@
+# TODO: comment file sections
+
 # Written by Eric Martel (emartel@gmail.com / www.ericmartel.com)
 
 # Available commands are listed in Default.sublime-commands
@@ -145,6 +147,9 @@ class PerforceCommand(object):
         else:
             kwargs['env'] = environ
 
+        if self.verbose:
+            display_message(message)
+
         thread = CommandThread(command,
             functools.partial(self.check_output, callback), **kwargs)
         thread.start()
@@ -152,7 +157,6 @@ class PerforceCommand(object):
 
     def check_output(self, callback, output, retcode):
         p4_failed = output.startswith(PERFORCE_P4_CLIENT_ERROR_MESSAGE)
-        print 'verbose', self.verbose
 
         if not p4_failed:
             cleaned = []
