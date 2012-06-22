@@ -25,7 +25,6 @@ import sublime_plugin
 import functools
 import json
 import os
-import re
 import subprocess
 import tempfile
 import threading
@@ -47,7 +46,10 @@ perforceplugin_dir = os.getcwdu()
 
 PERFORCE_SETTINGS_PATH = 'Perforce.sublime-settings'
 PERFORCE_ENVIRONMENT_VARIABLES = ('P4PORT', 'P4CLIENT', 'P4USER', 'P4PASSWD')
-P4INFO_USERNAME_RE = re.compile(r'^User name: (?P<username>.+)$', re.MULTILINE)
+PERFORCE_P4_ERROR_PREFIX = 'error'
+PERFORCE_P4_CLIENT_ERROR_MESSAGE = 'Perforce client error'
+PERFORCE_P4_OUTPUT_START_MESSAGE = 'P4 OUTPUT START'
+PERFORCE_P4_OUTPUT_END_MESSAGE = 'P4 OUTPUT END'
 
 
 def load_settings():
@@ -64,6 +66,10 @@ def main_thread(callback, *args, **kwargs):
     sublime.set_timeout(functools.partial(callback, *args, **kwargs), 0)
 
 
+def display_message(message):
+    main_thread(sublime.status_message, message)
+
+
 def is_writable(path):
     return os.access(path, os.W_OK)
 
@@ -78,7 +84,6 @@ class ThreadProgress(object):
 
     def run(self, i):
         if not self.thread.is_alive():
-            main_thread(sublime.status_message, '')
             return
 
         before = i % self.size
@@ -104,21 +109,27 @@ class CommandThread(threading.Thread):
         self.env = kwargs.get('env') or os.environ
 
     def run(self):
+        # Workaround for http://bugs.python.org/issue8557
+        shell = sublime.platform() == 'windows'
+
         process = subprocess.Popen(self.command,
             stdout=self.stdout, stderr=subprocess.STDOUT,
             stdin=subprocess.PIPE, cwd=self.cwd, env=self.env,
-            shell=True, universal_newlines=True)
+            shell=shell, universal_newlines=True)
         output = process.communicate(self.stdin)[0] or ''
-        main_thread(self.on_done, output)
+        main_thread(self.on_done, output, process.returncode)
 
 
 class PerforceCommand(object):
     def run_command(self, command, callback=None, **kwargs):
-        message = kwargs.get('status_message', command)
+        # TODO: what if p4 is not in path?
+        command = ['p4', '-s'] + command
+        message = kwargs.get('status_message', ' '.join(command))
         callback = callback or self.generic_done
+        self.verbose = kwargs.get('verbose', False)
 
         if sublime.platform == 'osx':
-            command = 'source ~/.bash_profile && %s' % command
+            command = ['source', '~/.bash_profile', '&&'] + command
 
         # Get p4-related variables from plugin preferences.
         settings = load_settings()
@@ -139,9 +150,38 @@ class PerforceCommand(object):
         thread.start()
         ThreadProgress(thread, message)
 
-    def check_output(self, callback, output):
-        # TODO: implement
-        callback(output)
+    def check_output(self, callback, output, retcode):
+        p4_failed = output.startswith(PERFORCE_P4_CLIENT_ERROR_MESSAGE)
+        print 'verbose', self.verbose
+
+        if not p4_failed:
+            cleaned = []
+            for line in output.splitlines()[:-1]:  # skip line 'exit: <number>'
+                prefix, _, message = line.partition(':')
+                p4_failed = prefix == PERFORCE_P4_ERROR_PREFIX
+                cleaned.append(message.lstrip())
+            output = '\n'.join(cleaned)
+
+        if p4_failed or retcode != 0:
+            self.print_output(output)
+            main_thread(sublime.status_message,
+                'Something went wrong, see console for details')
+        else:
+            if self.verbose:
+                self.print_output(output)
+            callback(output)
+
+    def print_output(self, output):
+
+        def wrap(message, length=80):
+            return (' %s ' % message).center(length, '-')
+
+        print wrap(PERFORCE_P4_OUTPUT_START_MESSAGE)
+        print output
+        print wrap(PERFORCE_P4_OUTPUT_END_MESSAGE)
+
+    def generic_done(self, output):
+        pass
 
 
 class PerforceWindowCommand(PerforceCommand, sublime_plugin.WindowCommand):
@@ -149,26 +189,32 @@ class PerforceWindowCommand(PerforceCommand, sublime_plugin.WindowCommand):
 
 
 class PerforceTextCommand(PerforceCommand, sublime_plugin.TextCommand):
-    pass
+    def active_view(self):
+        return self.view
 
 
 def p4(*args, **kwargs):
     PerforceCommand().run_command(*args, **kwargs)
 
 
+def p4info(return_callback):
+
+    def parse(callback, output):
+        result = {}
+        for line in output.splitlines():
+            key, _, value = line.partition(':')
+            result[key.replace(' ', '_').lower()] = value.strip()
+        callback(result)
+
+    p4(['info'], callback=functools.partial(parse, return_callback))
+
+
 def get_current_user(return_callback):
 
-    def extract_username(callback, output):
-        match = P4INFO_USERNAME_RE.search(output)
-        if match:
-            # TODO: remove strip
-            callback(match.groupdict()['username'].strip())
-        else:
-            # TODO: handle
-            pass
+    def get_value(callback, info_dict):
+        callback(info_dict['user_name'])
 
-    p4('p4 info',
-        callback=functools.partial(extract_username, return_callback))
+    p4info(return_callback=functools.partial(get_value, return_callback))
 
 
 def get_pending_changelists(return_callback):
@@ -179,57 +225,50 @@ def get_pending_changelists(return_callback):
             # TODO: cleanup output
             callback(output.splitlines())
 
-        p4('p4 changes -s pending -u %s' % username,
+        p4(['changes', '-s', 'pending', '-u', username],
              callback=functools.partial(parse, return_callback))
 
     get_current_user(return_callback=get_raw_changes)
 
 
 def get_client_root(return_callback):
-    # TODO: implement
-    return_callback('foo')
+
+    def get_value(callback, info_dict):
+        client_root = info_dict.get('client_root', None)
+        if client_root is None:
+            main_thread(sublime.error_message,
+                "Perforce: Please configure clientspec. Launching 'p4 client'...")
+            p4(['client'])
+        else:
+            callback(os.path.normpath(client_root))
+
+    p4info(return_callback=functools.partial(get_value, return_callback))
 
 
 def is_under_client_root(candidate, return_callback):
 
     def check(root):
-        path, root = map(os.path.normpath, [candidate, root])
-        return_callback(root == os.path.commonprefix([path, root]))
+        prefix = os.path.commonprefix([os.path.normpath(candidate), root])
+        return_callback(root == prefix)
 
     get_client_root(return_callback=check)
 
 
-def GetClientRoot(in_dir):
-    # check if the file is in the depot
-    command = ConstructCommand('p4 info')
-    p = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, cwd=global_folder, shell=True)
-    result, err = p.communicate()
+class PerforceAddCommand(PerforceTextCommand):
+    def run(self, edit):
 
-    if(err):
-        WarnUser(err.strip())
-        return -1
+        def add(filename, is_in_depot):
+            if is_in_depot:
+                self.run_command(['add', filename], verbose=True)
+            else:
+                display_message('File is not under the client root')
 
-    # locate the line containing "Client root: " and extract the following path
-    startindex = result.find("Client root: ")
-    if(startindex == -1):
-        # sometimes the clientspec is not displayed
-        sublime.error_message("Perforce Plugin: p4 info didn't supply a valid clientspec, launching p4 client");
-        command = ConstructCommand('p4 client')
-        p = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, cwd=global_folder, shell=True)
-        result, err = p.communicate()
-        return -1
-
-    startindex += 13 # advance after 'Client root: '
-
-    endindex = result.find("\n", startindex)
-    if(endindex == -1):
-        WarnUser("Unexpected output from 'p4 info'.")
-        return -1
-
-    # convert all paths to "os.sep" slashes
-    convertedclientroot = result[startindex:endindex].strip().replace('\\', os.sep).replace('/', os.sep)
-
-    return convertedclientroot
+        filename = self.active_view().file_name()
+        if filename:
+            is_under_client_root(filename,
+                return_callback=functools.partial(add, filename))
+        else:
+            display_message('View does not contain a file')
 
 
 def IsFileInDepot(in_folder, in_filename):
@@ -404,21 +443,6 @@ class PerforceAutoAdd(sublime_plugin.EventListener):
             folder_name, filename = os.path.split(view.file_name())
             success, message = Add(folder_name, filename)
             LogResults(success, message)
-
-class PerforceAddCommand(sublime_plugin.TextCommand):
-    def run(self, edit):
-        if(self.view.file_name()):
-            folder_name, filename = os.path.split(self.view.file_name())
-
-            if(IsFileInDepot(folder_name, filename)):
-                success, message = Add(folder_name, filename)
-            else:
-                success = 0
-                message = "File is not under the client root."
-
-            LogResults(success, message)
-        else:
-            WarnUser("View does not contain a file")
 
 # Rename section
 def Rename(in_filename, in_newname):
@@ -1088,7 +1112,7 @@ class PerforceTestCase(unittest.TestCase):
         def on_done(result):
             print (result,)
 
-        is_under_client_root('asdas', on_done)
+        is_under_client_root('/home/roman/aslkdj', on_done)
 
 
 class PerforceRunUnitTests(sublime_plugin.WindowCommand):
