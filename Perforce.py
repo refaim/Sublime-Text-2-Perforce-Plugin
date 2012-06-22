@@ -387,6 +387,23 @@ class PerforceCreateChangelistCommand(PerforceWindowCommand):
         self.panel(result)
 
 
+class PerforceDeleteCommand(PerforceTextCommand):
+    def run(self, edit):
+        self.check_depot_file(return_callback=self.check_passed)
+
+    def check_passed(self, filename):
+        self.run_command(['delete', filename],
+            callback=functools.partial(self.delete_done, filename))
+
+    def delete_done(self, filename, result):
+        if os.path.exists(filename):
+            # Can't delete file for some reason.
+            self.panel(result)
+        else:
+            # File was deleted, close view.
+            self.active_window().run_command('close')
+
+
 def IsFileInDepot(in_folder, in_filename):
     isUnderClientRoot = IsFolderUnderClientRoot(in_folder);
     if(os.path.isfile(os.path.join(in_folder, in_filename))): # file exists on disk, not being added
@@ -597,33 +614,6 @@ class PerforceRenameCommand(sublime_plugin.WindowCommand):
 
     def on_cancel(self):
         pass
-
-# Delete section
-def Delete(in_folder, in_filename):
-    success, message = PerforceCommandOnFile("delete", in_folder, in_filename)
-    if(success):
-        # test if the file is deleted
-        if(os.path.isfile(os.path.join(in_folder, in_filename))):
-            success = 0
-
-    return success, message
-
-class PerforceDeleteCommand(sublime_plugin.WindowCommand):
-    def run(self):
-        if(self.window.active_view().file_name()):
-            folder_name, filename = os.path.split(self.window.active_view().file_name())
-
-            if(IsFileInDepot(folder_name, filename)):
-                success, message = Delete(folder_name, filename)
-                if(success): # the file was properly deleted on perforce, ask Sublime Text to close the view
-                    self.window.run_command('close');
-            else:
-                success = 0
-                message = "File is not under the client root."
-
-            LogResults(success, message)
-        else:
-            WarnUser("View does not contain a file")
 
 # Revert section
 def Revert(in_folder, in_filename):
