@@ -100,6 +100,8 @@ class ThreadProgress(object):
 
     def run(self, i):
         if not self.thread.is_alive():
+            # TODO: eventually this message overwrite other
+            # significant messages set from main thread.
             sublime.status_message(self.message)
             return
 
@@ -404,6 +406,23 @@ class PerforceDeleteCommand(PerforceTextCommand):
             self.active_window().run_command('close')
 
 
+class PerforceCheckoutCommand(PerforceTextCommand):
+    def run(self, edit):
+        self.check_depot_file(return_callback=self.check_passed)
+
+    def check_passed(self, filename):
+        if is_writable(filename):
+            display_message('File is already writable')
+        else:
+            self.run_command(['edit', filename],
+                callback=functools.partial(self.checkout_done, filename))
+
+    def checkout_done(self, filename, result):
+        if not is_writable(filename):
+            # Can't checkout file for some reason.
+            self.panel(result)
+
+
 def IsFileInDepot(in_folder, in_filename):
     isUnderClientRoot = IsFolderUnderClientRoot(in_folder);
     if(os.path.isfile(os.path.join(in_folder, in_filename))): # file exists on disk, not being added
@@ -493,20 +512,6 @@ def LogResults(success, message):
     else:
         WarnUser(message);
 
-# Checkout section
-def Checkout(in_filename):
-    if(IsFileWritable(in_filename)):
-        return -1, "File is already writable."
-
-    folder_name, filename = os.path.split(in_filename)
-    isInDepot = IsFileInDepot(folder_name, filename)
-
-    if(isInDepot != 1):
-        return -1, "File is not under the client root."
-
-    # check out the file
-    return PerforceCommandOnFile("edit", folder_name, in_filename);
-
 class PerforceAutoCheckout(sublime_plugin.EventListener):
     def on_modified(self, view):
         if(not view.file_name()):
@@ -535,14 +540,6 @@ class PerforceAutoCheckout(sublime_plugin.EventListener):
         if(view.is_dirty()):
             success, message = Checkout(view.file_name())
             LogResults(success, message);
-
-class PerforceCheckoutCommand(sublime_plugin.TextCommand):
-    def run(self, edit):
-        if(self.view.file_name()):
-            success, message = Checkout(self.view.file_name())
-            LogResults(success, message)
-        else:
-            WarnUser("View does not contain a file")
 
 # Add section
 def Add(in_folder, in_filename):
