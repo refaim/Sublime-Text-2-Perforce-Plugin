@@ -36,7 +36,7 @@
         "command": "perforce_select_graphical_diff_application"
     },
     {
-        "caption": "Perforce: List Checkedout Files",
+        "caption": "Perforce: List Checked Out Files",
         "command": "perforce_list_checked_out_files"
     },
     {
