@@ -49,6 +49,7 @@ perforceplugin_dir = os.getcwdu()
 
 PERFORCE_SETTINGS_PATH = 'Perforce.sublime-settings'
 PERFORCE_ENVIRONMENT_VARIABLES = ('P4PORT', 'P4CLIENT', 'P4USER', 'P4PASSWD')
+PERFORCE_DEFAULT_DESCRIPTION = '<enter description here>'
 
 PERFORCE_P4_ERROR_PREFIX = 'error'
 PERFORCE_P4_OUTPUT_PREFIXES = (
@@ -349,6 +350,40 @@ class PerforceDiffCommand(PerforceTextCommand):
         else:
             self.scratch(result, title='Perforce Diff')
 
+
+class PerforceCreateChangelistCommand(PerforceWindowCommand):
+    def run(self):
+        self.active_window().show_input_panel('Changelist Description', '',
+            self.description_entered, None, None)
+
+    def description_entered(self, description):
+        # Get default changelist specification.
+        self.run_command(['change', '-o'],
+            callback=functools.partial(self.specification_obtained, description))
+
+    def specification_obtained(self, user_description, result):
+        # According to Perforce Knowledge Base,
+        # all lines in description must start with a space or tab.
+        # See http://kb.perforce.com/article/6 for details.
+        buffer_ = []
+        for line in user_description.splitlines():
+            if not line.startswith(' '):
+                line = ' ' + line
+            buffer_.append(line)
+        # TODO: use linesep from settings?
+        user_description = '\n'.join(buffer_)
+
+        # Replace the default description on entered by user
+        # and remove all files from the new changelist.
+        result = (result[:result.find(PERFORCE_DEFAULT_DESCRIPTION)] +
+            user_description)
+
+        # Create changelist.
+        self.run_command(['change', '-i'], stdin=result,
+            callback=self.on_created)
+
+    def on_created(self, result):
+        self.panel(result)
 
 
 def IsFileInDepot(in_folder, in_filename):
@@ -794,60 +829,6 @@ class ListCheckedOutFilesThread(threading.Thread):
 class PerforceListCheckedOutFilesCommand(sublime_plugin.WindowCommand):
     def run(self):
         ListCheckedOutFilesThread(self.window).start()
-
-# Create Changelist section
-def CreateChangelist(description):
-    # First, create an empty changelist, we will then get the cl number and set the description
-    command = ConstructCommand('p4 change -o')
-    p = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, cwd=global_folder, shell=True)
-    result, err = p.communicate()
-
-    if(err):
-        return 0, err
-
-    # Find the description field and modify it
-    result = result.replace("<enter description here>", description)
-
-    # Remove all files from the query, we want them to stay in Default
-    filesindex = result.rfind("Files:")
-    # The Files: section we want to get rid of is only present if there's files in the default changelist
-    if(filesindex > 640):
-        result = result[0:filesindex];
-
-    temp_changelist_description_file = open(os.path.join(tempfile.gettempdir(), "tempchangelist.txt"), 'w')
-
-    try:
-        temp_changelist_description_file.write(result)
-    finally:
-        temp_changelist_description_file.close()
-
-    command = ConstructCommand('p4 change -i < ' + temp_changelist_description_file.name)
-    p = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, cwd=global_folder, shell=True)
-    result, err = p.communicate()
-
-    # Clean up
-    os.unlink(temp_changelist_description_file.name)
-
-    if(err):
-        return 0, err
-
-    return 1, result
-
-class PerforceCreateChangelistCommand(sublime_plugin.WindowCommand):
-    def run(self):
-        # Get the description
-        self.window.show_input_panel('Changelist Description', '',
-            self.on_done, self.on_change, self.on_cancel)
-
-    def on_done(self, input):
-        success, message = CreateChangelist(input)
-        LogResults(success, message)
-
-    def on_change(self, input):
-        pass
-
-    def on_cancel(self):
-        pass
 
 # Move Current File to Changelist
 def MoveFileToChangelist(in_filename, in_changelist):
