@@ -60,7 +60,7 @@ PERFORCE_P4_OUTPUT_PREFIXES = (
     'text',
 )
 
-PERFORCE_DIFF_HEADER_RE = re.compile(r'^={4}.+={4}$')
+PERFORCE_P4_DIFF_HEADER_RE = re.compile(r'^={4}.+={4}$')
 
 PERFORCE_P4_CLIENT_ERROR_MESSAGE = 'Perforce client error'
 
@@ -100,6 +100,7 @@ class ThreadProgress(object):
 
     def run(self, i):
         if not self.thread.is_alive():
+            sublime.status_message(self.message)
             return
 
         before = i % self.size
@@ -208,6 +209,20 @@ class PerforceCommand(object):
     def generic_done(self, output):
         pass
 
+    def check_depot_file(self, return_callback):
+        def root_check_done(filename, is_in_depot):
+            if is_in_depot:
+                return_callback(filename)
+            else:
+                display_message('File is not under the client root')
+
+        filename = self.active_view().file_name()
+        if filename:
+            is_under_client_root(filename,
+                return_callback=functools.partial(root_check_done, filename))
+        else:
+            display_message('View does not contain a file')
+
     def _output_to_view(self, output_file, output, clear=False,
             syntax='Packages/Diff/Diff.tmLanguage'):
         output_file.set_syntax_file(syntax)
@@ -251,20 +266,6 @@ class PerforceTextCommand(PerforceCommand, sublime_plugin.TextCommand):
 
     def active_window(self):
         return self.view.window() or sublime.active_window()
-
-    def check_depot_file(self, return_callback):
-        def root_check_done(filename, is_in_depot):
-            if is_in_depot:
-                return_callback(filename)
-            else:
-                display_message('File is not under the client root')
-
-        filename = self.active_view().file_name()
-        if filename:
-            is_under_client_root(filename,
-                return_callback=functools.partial(root_check_done, filename))
-        else:
-            display_message('View does not contain a file')
 
 
 def p4(*args, **kwargs):
@@ -330,22 +331,22 @@ def is_under_client_root(candidate, return_callback):
 
 class PerforceAddCommand(PerforceTextCommand):
     def run(self, edit):
-        self.check_depot_file(return_callback=self.check_done)
+        self.check_depot_file(return_callback=self.check_passed)
 
-    def check_done(self, filename):
+    def check_passed(self, filename):
         self.run_command(['add', filename], verbose=True)
 
 
 class PerforceDiffCommand(PerforceTextCommand):
     def run(self, edit):
-        self.check_depot_file(return_callback=self.check_done)
+        self.check_depot_file(return_callback=self.check_passed)
 
-    def check_done(self, filename):
+    def check_passed(self, filename):
         self.run_command(['diff', filename], callback=self.diff_done)
 
     def diff_done(self, result):
         # TODO: show diff in output panel
-        if PERFORCE_DIFF_HEADER_RE.match(result):
+        if PERFORCE_P4_DIFF_HEADER_RE.match(result):
             self.panel('No output')
         else:
             self.scratch(result, title='Perforce Diff')
@@ -363,7 +364,7 @@ class PerforceCreateChangelistCommand(PerforceWindowCommand):
 
     def specification_obtained(self, user_description, result):
         # According to Perforce Knowledge Base,
-        # all lines in description must start with a space or tab.
+        # all lines in the description must start with a space or tab.
         # See http://kb.perforce.com/article/6 for details.
         buffer_ = []
         for line in user_description.splitlines():
