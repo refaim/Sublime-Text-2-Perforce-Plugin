@@ -1,5 +1,6 @@
 # TODO: comment file sections
 # TODO: rename return_callback to callback?
+# TODO: show all errors in panel
 
 # Written by Eric Martel (emartel@gmail.com / www.ericmartel.com)
 
@@ -331,7 +332,7 @@ def get_client_root(return_callback):
     def get_value(callback, info_dict):
         client_root = info_dict.get('client_root', None)
         if client_root is None:
-            # TODO: don't show error message
+            # TODO: show in panel or edit client in ST2
             main_thread(sublime.error_message,
                 "Perforce: Please configure clientspec. Launching 'p4 client'...")
             p4(['client'])
@@ -531,15 +532,6 @@ def AppendToChangelistDescription(changelist, input):
 
     return 1, result
 
-def PerforceCommandOnFile(in_command, in_folder, in_filename):
-    command = ConstructCommand('p4 ' + in_command + ' "' + in_filename + '"')
-    p = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, cwd=global_folder, shell=True)
-    result, err = p.communicate()
-
-    if(not err):
-        return 1, result.strip()
-    else:
-        return 0, err.strip()
 
 def WarnUser(message):
     perforce_settings = sublime.load_settings('Perforce.sublime-settings')
@@ -586,10 +578,6 @@ class PerforceAutoCheckout(sublime_plugin.EventListener):
             success, message = Checkout(view.file_name())
             LogResults(success, message);
 
-# Add section
-def Add(in_folder, in_filename):
-    # add the file
-    return PerforceCommandOnFile("add", in_folder, in_filename);
 
 class PerforceAutoAdd(sublime_plugin.EventListener):
     preSaveIsFileInDepot = 0
