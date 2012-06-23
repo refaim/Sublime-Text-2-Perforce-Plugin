@@ -77,6 +77,8 @@ PERFORCE_P4_CLIENT_ERROR_MESSAGE = 'Perforce client error'
 PERFORCE_P4_OUTPUT_START_MESSAGE = 'P4 OUTPUT START'
 PERFORCE_P4_OUTPUT_END_MESSAGE = 'P4 OUTPUT END'
 
+PERFORCE_P4_NO_OPENED_FILES_ERROR = 'File(s) not opened on this client.'
+
 
 def load_settings():
     return sublime.load_settings(PERFORCE_SETTINGS_PATH)
@@ -156,6 +158,7 @@ class PerforceCommand(object):
         self.command = ' '.join(raw_command)
         message = kwargs.get('status_message', self.command)
         callback = callback or self.generic_done
+        self.allowed_errors = kwargs.get('allowed_errors', [])
 
         if sublime.platform == 'osx':
             raw_command = ['source', '~/.bash_profile', '&&'] + raw_command
@@ -190,8 +193,10 @@ class PerforceCommand(object):
             for line in output.splitlines()[:-1]:  # skip line 'exit: <number>'
                 if any(line.startswith(prefix) for prefix in PERFORCE_P4_OUTPUT_PREFIXES):
                     prefix, _, message = line.partition(':')
-                    p4_failed = prefix == PERFORCE_P4_ERROR_PREFIX
-                    cleaned.append(message.lstrip())
+                    message = message.lstrip()
+                    p4_failed = (prefix == PERFORCE_P4_ERROR_PREFIX and
+                        message not in self.allowed_errors)
+                    cleaned.append(message)
                 else:
                     cleaned.append(line)
             output = '\n'.join(cleaned)
@@ -466,6 +471,117 @@ class PerforceSubmitCommand(PerforceWindowCommand):
     def submit_done(self, result):
         # TODO: handle 'No files to submit' in check_output()
         self.panel(result)
+
+
+class PerforceListCheckedOutFilesCommand(PerforceWindowCommand):
+    def run(self):
+        get_pending_changelists(return_callback=self.changelists_recieved)
+
+    def changelists_recieved(self, changelists):
+        default_changelist = {
+            'number': 'default',
+            'description': '<no description>'
+        }
+        changelists.append(default_changelist)
+        self.changelists = changelists
+        self.files = []
+        self.extract_next()
+
+    def extract_next(self):
+        current = self.changelists.pop()
+        self.run_command(['opened', '-c', current['number']],
+            callback=functools.partial(self.process_extracted, current),
+            allowed_errors=PERFORCE_P4_NO_OPENED_FILES_ERROR)
+
+    def process_extracted(self, changelist, output):
+        print output.splitlines()
+        if self.changelists:
+            self.extract_next()
+        else:
+            self.extracting_done()
+
+    def extracting_done(self):
+        if self.files:
+            self.quick_panel(self.files, self.on_pick)
+        else:
+            self.panel('There are no checked out files')
+
+    def on_pick(self, picked):
+        if picked != -1:
+            pass
+            #self.active_window().open_file()
+
+
+class ListCheckedOutFilesThread(threading.Thread):
+    def __init__(self, window):
+        self.window = window
+        threading.Thread.__init__(self)
+
+    def ConvertFileNameToFileOnDisk(self, in_filename):
+        clientroot = GetClientRoot(os.path.dirname(in_filename))
+        if(clientroot == -1):
+            return 0
+
+        filename = clientroot + os.sep + in_filename.replace('\\', os.sep).replace('/', os.sep)
+
+        return filename
+
+    def MakeFileListFromChangelist(self, in_changelistline):
+        files_list = []
+
+        # Launch p4 opened to retrieve all files from changelist
+        command = ConstructCommand('p4 opened -c ' + in_changelistline[1])
+        p = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, cwd=global_folder, shell=True)
+        result, err = p.communicate()
+        if(not err):
+            lines = result.splitlines()
+            for line in lines:
+                # remove the change #
+                poundindex = line.rfind('#')
+                cleanedfile = line[0:poundindex]
+
+                # just keep the filename
+                cleanedfile = '/'.join(cleanedfile.split('/')[3:])
+
+                file_entry = [cleanedfile[cleanedfile.rfind('/')+1:]]
+                file_entry.append("Changelist: " + in_changelistline[1])
+                file_entry.append(' '.join(in_changelistline[7:]));
+                localfile = self.ConvertFileNameToFileOnDisk(cleanedfile)
+                if(localfile != 0):
+                    file_entry.append(localfile)
+                    files_list.append(file_entry)
+        return files_list
+
+    def MakeCheckedOutFileList(self):
+        files_list = self.MakeFileListFromChangelist(['','default','','','','','','Default Changelist']);
+
+        currentuser = GetUserFromClientspec()
+        if(currentuser == -1):
+            return files_list
+
+        # Launch p4 changes to retrieve all the pending changelists
+        command = ConstructCommand('p4 changes -s pending -u ' + currentuser);
+        p = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, cwd=global_folder, shell=True)
+        result, err = p.communicate()
+
+        if(not err):
+            changelists = result.splitlines()
+
+            # for each line, extract the change, and run p4 opened on it to list all the files
+            for changelistline in changelists:
+                changelistlinesplit = changelistline.split(' ')
+                files_list.extend(self.MakeFileListFromChangelist(changelistlinesplit))
+
+        return files_list
+
+    def on_done(self, picked):
+        if picked == -1:
+            return
+        file_name = self.files_list[picked][3]
+
+        def open_file():
+            self.window.open_file(file_name)
+        sublime.set_timeout(open_file, 10)
 
 
 def IsFileInDepot(in_folder, in_filename):
@@ -764,93 +880,6 @@ class PerforceSelectGraphicalDiffApplicationCommand(sublime_plugin.WindowCommand
         settings.set('perforce_selectedgraphicaldiffapp', entry['name'])
         settings.set('perforce_selectedgraphicaldiffapp_command', entry['diffcommand'])
         sublime.save_settings('Perforce.sublime-settings')
-
-# List Checked Out Files section
-class ListCheckedOutFilesThread(threading.Thread):
-    def __init__(self, window):
-        self.window = window
-        threading.Thread.__init__(self)
-
-    def ConvertFileNameToFileOnDisk(self, in_filename):
-        clientroot = GetClientRoot(os.path.dirname(in_filename))
-        if(clientroot == -1):
-            return 0
-
-        filename = clientroot + os.sep + in_filename.replace('\\', os.sep).replace('/', os.sep)
-
-        return filename
-
-    def MakeFileListFromChangelist(self, in_changelistline):
-        files_list = []
-
-        # Launch p4 opened to retrieve all files from changelist
-        command = ConstructCommand('p4 opened -c ' + in_changelistline[1])
-        p = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, cwd=global_folder, shell=True)
-        result, err = p.communicate()
-        if(not err):
-            lines = result.splitlines()
-            for line in lines:
-                # remove the change #
-                poundindex = line.rfind('#')
-                cleanedfile = line[0:poundindex]
-
-                # just keep the filename
-                cleanedfile = '/'.join(cleanedfile.split('/')[3:])
-
-                file_entry = [cleanedfile[cleanedfile.rfind('/')+1:]]
-                file_entry.append("Changelist: " + in_changelistline[1])
-                file_entry.append(' '.join(in_changelistline[7:]));
-                localfile = self.ConvertFileNameToFileOnDisk(cleanedfile)
-                if(localfile != 0):
-                    file_entry.append(localfile)
-                    files_list.append(file_entry)
-        return files_list
-
-    def MakeCheckedOutFileList(self):
-        files_list = self.MakeFileListFromChangelist(['','default','','','','','','Default Changelist']);
-
-        currentuser = GetUserFromClientspec()
-        if(currentuser == -1):
-            return files_list
-
-        # Launch p4 changes to retrieve all the pending changelists
-        command = ConstructCommand('p4 changes -s pending -u ' + currentuser);
-        p = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, cwd=global_folder, shell=True)
-        result, err = p.communicate()
-
-        if(not err):
-            changelists = result.splitlines()
-
-            # for each line, extract the change, and run p4 opened on it to list all the files
-            for changelistline in changelists:
-                changelistlinesplit = changelistline.split(' ')
-                files_list.extend(self.MakeFileListFromChangelist(changelistlinesplit))
-
-        return files_list
-
-    def run(self):
-        self.files_list = self.MakeCheckedOutFileList()
-
-        def show_quick_panel():
-            if not self.files_list:
-                sublime.error_message(__name__ + ': There are no checked out files to list.')
-                return
-            self.window.show_quick_panel(self.files_list, self.on_done)
-        sublime.set_timeout(show_quick_panel, 10)
-
-    def on_done(self, picked):
-        if picked == -1:
-            return
-        file_name = self.files_list[picked][3]
-
-        def open_file():
-            self.window.open_file(file_name)
-        sublime.set_timeout(open_file, 10)
-
-
-class PerforceListCheckedOutFilesCommand(sublime_plugin.WindowCommand):
-    def run(self):
-        ListCheckedOutFilesThread(self.window).start()
 
 # Move Current File to Changelist
 def MoveFileToChangelist(in_filename, in_changelist):
