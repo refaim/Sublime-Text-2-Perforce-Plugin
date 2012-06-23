@@ -275,16 +275,23 @@ class PerforceGenericCommand(PerforceCommand):
 
         def get_raw_changes(username):
 
-            def parse(callback, output):
+            def parse(output):
                 result = []
                 for match in PERFORCE_P4_CHANGES_CL_RE.finditer(output):
                     data = match.groupdict()
+
+                    # Perforce adds leading and/or trailing space characters
+                    # to the changelist description.
+                    # I could not find any pattern, so I just remove all
+                    # leading and trailing spaces.
                     data['description'] = data['description'].strip()
+
                     result.append(data)
-                callback(result)
+
+                return_callback(result)
 
             self.run_command(['changes', '-s', 'pending', '-u', username],
-                 callback=functools.partial(parse, return_callback))
+                 callback=parse)
 
         self.get_current_user(return_callback=get_raw_changes)
 
