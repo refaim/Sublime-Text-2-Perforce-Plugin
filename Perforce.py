@@ -1,6 +1,7 @@
 # TODO: comment file sections
 # TODO: rename return_callback to callback?
 # TODO: show all errors in panel
+# TODO: comment all methods
 
 # Written by Eric Martel (emartel@gmail.com / www.ericmartel.com)
 
@@ -225,20 +226,6 @@ class PerforceCommand(object):
     def generic_done(self, output):
         pass
 
-    def check_depot_file(self, return_callback):
-        def root_check_done(filename, is_in_depot):
-            if is_in_depot:
-                return_callback(filename)
-            else:
-                display_message('File is not under the client root')
-
-        filename = self.active_view().file_name()
-        if filename:
-            is_under_client_root(filename,
-                return_callback=functools.partial(root_check_done, filename))
-        else:
-            display_message('View does not contain a file')
-
     def _output_to_view(self, output_file, output, clear=False,
             syntax='Packages/Diff/Diff.tmLanguage'):
         output_file.set_syntax_file(syntax)
@@ -271,7 +258,86 @@ class PerforceCommand(object):
         self.active_window().show_quick_panel(*args, **kwargs)
 
 
-class PerforceWindowCommand(PerforceCommand, sublime_plugin.WindowCommand):
+class PerforceGenericCommand(PerforceCommand):
+    def p4info(self, return_callback):
+
+        def parse(callback, output):
+            result = {}
+            for line in output.splitlines():
+                key, _, value = line.partition(':')
+                result[key.replace(' ', '_').lower()] = value.strip()
+            callback(result)
+
+        self.run_command(['info'],
+            callback=functools.partial(parse, return_callback))
+
+    def get_current_user(self, return_callback):
+
+        def get_value(callback, info_dict):
+            callback(info_dict['user_name'])
+
+        self.p4info(
+            return_callback=functools.partial(get_value, return_callback))
+
+    def get_pending_changelists(self, return_callback):
+
+        def get_raw_changes(username):
+
+            def parse(callback, output):
+                parsed = []
+                for cl in output.splitlines():
+                    match = PERFORCE_P4_PENDING_CL_RE.match(cl)
+                    if match:
+                        parsed.append(match.groupdict())
+                    else:
+                        # TODO: handle
+                        raise
+                callback(parsed)
+
+            self.run_command(['changes', '-s', 'pending', '-u', username],
+                 callback=functools.partial(parse, return_callback))
+
+        self.get_current_user(return_callback=get_raw_changes)
+
+    def get_client_root(self, return_callback):
+
+        def get_value(callback, info_dict):
+            client_root = info_dict.get('client_root', None)
+            if client_root is None:
+                # TODO: show in panel or edit client in ST2
+                main_thread(sublime.error_message,
+                    "Perforce: Please configure clientspec. Launching 'p4 client'...")
+                self.run_command(['client'])
+            else:
+                callback(os.path.normpath(client_root))
+
+        self.p4info(
+            return_callback=functools.partial(get_value, return_callback))
+
+    def is_under_client_root(self, candidate, return_callback):
+
+        def check(root):
+            prefix = os.path.commonprefix([os.path.normpath(candidate), root])
+            return_callback(root == prefix)
+
+        self.get_client_root(return_callback=check)
+
+    def check_depot_file(self, return_callback):  # TODO: rename method
+        def root_check_done(filename, is_in_depot):
+            if is_in_depot:
+                return_callback(filename)
+            else:
+                display_message('File is not under the client root')
+
+        filename = self.active_view().file_name()
+        if filename:
+            self.is_under_client_root(filename,
+                return_callback=functools.partial(root_check_done, filename))
+        else:
+            display_message('View does not contain a file')
+
+
+class PerforceWindowCommand(PerforceGenericCommand, sublime_plugin.WindowCommand):
     def active_view(self):
         return self.window.active_view()
 
@@ -279,81 +345,12 @@ class PerforceWindowCommand(PerforceCommand, sublime_plugin.WindowCommand):
         return self.window
 
 
-class PerforceTextCommand(PerforceCommand, sublime_plugin.TextCommand):
+class PerforceTextCommand(PerforceGenericCommand, sublime_plugin.TextCommand):
     def active_view(self):
         return self.view
 
     def active_window(self):
         return self.view.window() or sublime.active_window()
-
-
-def p4(*args, **kwargs):
-    PerforceCommand().run_command(*args, **kwargs)
-
-
-def p4info(return_callback):
-
-    def parse(callback, output):
-        result = {}
-        for line in output.splitlines():
-            key, _, value = line.partition(':')
-            result[key.replace(' ', '_').lower()] = value.strip()
-        callback(result)
-
-    p4(['info'], callback=functools.partial(parse, return_callback))
-
-
-def get_current_user(return_callback):
-
-    def get_value(callback, info_dict):
-        callback(info_dict['user_name'])
-
-    p4info(return_callback=functools.partial(get_value, return_callback))
-
-
-def get_pending_changelists(return_callback):
-
-    def get_raw_changes(username):
-
-        def parse(callback, output):
-            parsed = []
-            for cl in output.splitlines():
-                match = PERFORCE_P4_PENDING_CL_RE.match(cl)
-                if match:
-                    parsed.append(match.groupdict())
-                else:
-                    # TODO: handle
-                    raise
-            callback(parsed)
-
-        p4(['changes', '-s', 'pending', '-u', username],
-             callback=functools.partial(parse, return_callback))
-
-    get_current_user(return_callback=get_raw_changes)
-
-
-def get_client_root(return_callback):
-
-    def get_value(callback, info_dict):
-        client_root = info_dict.get('client_root', None)
-        if client_root is None:
-            # TODO: show in panel or edit client in ST2
-            main_thread(sublime.error_message,
-                "Perforce: Please configure clientspec. Launching 'p4 client'...")
-            p4(['client'])
-        else:
-            callback(os.path.normpath(client_root))
-
-    p4info(return_callback=functools.partial(get_value, return_callback))
-
-
-def is_under_client_root(candidate, return_callback):
-
-    def check(root):
-        prefix = os.path.commonprefix([os.path.normpath(candidate), root])
-        return_callback(root == prefix)
-
-    get_client_root(return_callback=check)
 
 
 class PerforceAddCommand(PerforceTextCommand):
@@ -451,7 +448,7 @@ class PerforceCheckoutCommand(PerforceTextCommand):
 
 class PerforceSubmitCommand(PerforceWindowCommand):
     def run(self):
-        get_pending_changelists(return_callback=self.changelists_recieved)
+        self.get_pending_changelists(return_callback=self.changelists_recieved)
 
     def changelists_recieved(self, changelists):
         if changelists:
@@ -475,7 +472,7 @@ class PerforceSubmitCommand(PerforceWindowCommand):
 
 class PerforceListCheckedOutFilesCommand(PerforceWindowCommand):
     def run(self):
-        get_pending_changelists(return_callback=self.changelists_recieved)
+        self.get_pending_changelists(return_callback=self.changelists_recieved)
 
     def changelists_recieved(self, changelists):
         default_changelist = {
