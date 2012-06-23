@@ -38,16 +38,6 @@ import unittest
 
 # Plugin Settings are located in 'perforce.sublime-settings' make a copy in the User folder to keep changes
 
-# global variable used when calling p4 - it stores the path of the file in the current view, used to determine with P4CONFIG to use
-# whenever a view is selected, the variable gets updated
-# TODO: get rid of this global variable
-global_folder = ''
-class PerforceP4CONFIGHandler(sublime_plugin.EventListener):
-    def on_activated(self, view):
-        if view.file_name():
-            global global_folder
-            global_folder, filename = os.path.split(view.file_name())
-
 # Executed at startup to store the path of the plugin... necessary to open files relative to the plugin
 perforceplugin_dir = os.getcwdu()
 
@@ -137,8 +127,8 @@ class CommandThread(threading.Thread):
         self.command = command
         self.on_done = on_done
         self.stdin = kwargs.get('stdin', None)
-        self.cwd = kwargs.get('cwd', global_folder)
-        self.env = kwargs.get('env', os.environ)
+        self.env = kwargs['env']
+        self.cwd = kwargs['cwd']
 
     def run(self):
         # Workaround for http://bugs.python.org/issue8557
@@ -156,11 +146,15 @@ class PerforceCommand(object):
     def run_command(self, command, callback=None, **kwargs):
         # TODO: what if p4 is not in path?
         raw_command = ['p4', '-s'] + command
-        self.verbose = kwargs.get('verbose', False)
         self.command = ' '.join(raw_command)
         message = kwargs.get('status_message', self.command)
-        callback = callback or self.generic_done
+
         self.allowed_errors = kwargs.get('allowed_errors', [])
+        self.verbose = kwargs.get('verbose', False)
+
+        # If cwd is not passed, use directory of the current file.
+        kwargs.setdefault('cwd',
+            os.path.dirname(self.active_view().file_name()))
 
         if sublime.platform == 'osx':
             raw_command = ['source', '~/.bash_profile', '&&'] + raw_command
@@ -182,6 +176,7 @@ class PerforceCommand(object):
         if self.verbose:
             display_message(message)
 
+        callback = callback or self.generic_done
         thread = CommandThread(raw_command,
             functools.partial(self.check_output, callback), **kwargs)
         thread.start()
