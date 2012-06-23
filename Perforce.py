@@ -65,13 +65,14 @@ PERFORCE_P4_OUTPUT_PREFIXES = (
 )
 
 PERFORCE_P4_DIFF_HEADER_RE = re.compile(r'^={4}.+={4}$')
-PERFORCE_P4_PENDING_CL_RE = re.compile(
+
+PERFORCE_P4_CHANGES_CL_RE = re.compile(
     r'''^Change\s
        (?P<number>\d+)\son\s
        (?P<date>\S+)\sby\s
        (?P<author>\S+)\s\*pending\*\s
-       '(?P<description>.+)\s'$
-    ''', re.VERBOSE)
+       '(?P<description>.+)'$
+    ''', re.VERBOSE | re.MULTILINE)
 
 PERFORCE_P4_CLIENT_ERROR_MESSAGE = 'Perforce client error'
 
@@ -284,15 +285,12 @@ class PerforceGenericCommand(PerforceCommand):
         def get_raw_changes(username):
 
             def parse(callback, output):
-                parsed = []
-                for cl in output.splitlines():
-                    match = PERFORCE_P4_PENDING_CL_RE.match(cl)
-                    if match:
-                        parsed.append(match.groupdict())
-                    else:
-                        # TODO: handle
-                        raise
-                callback(parsed)
+                result = []
+                for match in PERFORCE_P4_CHANGES_CL_RE.finditer(output):
+                    data = match.groupdict()
+                    data['description'] = data['description'].strip()
+                    result.append(data)
+                callback(result)
 
             self.run_command(['changes', '-s', 'pending', '-u', username],
                  callback=functools.partial(parse, return_callback))
