@@ -39,6 +39,7 @@ import unittest
 
 # global variable used when calling p4 - it stores the path of the file in the current view, used to determine with P4CONFIG to use
 # whenever a view is selected, the variable gets updated
+# TODO: get rid of this global variable
 global_folder = ''
 class PerforceP4CONFIGHandler(sublime_plugin.EventListener):
     def on_activated(self, view):
@@ -132,16 +133,15 @@ class CommandThread(threading.Thread):
         self.command = command
         self.on_done = on_done
         self.stdin = kwargs.get('stdin', None)
-        self.stdout = kwargs.get('stdout', subprocess.PIPE)
         self.cwd = kwargs.get('cwd', global_folder)
-        self.env = kwargs.get('env') or os.environ
+        self.env = kwargs.get('env', os.environ)
 
     def run(self):
         # Workaround for http://bugs.python.org/issue8557
         shell = sublime.platform() == 'windows'
 
         process = subprocess.Popen(self.command,
-            stdout=self.stdout, stderr=subprocess.STDOUT,
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
             stdin=subprocess.PIPE, cwd=self.cwd, env=self.env,
             shell=shell, universal_newlines=True)
         output = process.communicate(self.stdin)[0] or ''
@@ -151,14 +151,14 @@ class CommandThread(threading.Thread):
 class PerforceCommand(object):
     def run_command(self, command, callback=None, **kwargs):
         # TODO: what if p4 is not in path?
-        command = ['p4', '-s'] + command
+        raw_command = ['p4', '-s'] + command
         self.verbose = kwargs.get('verbose', False)
-        self.command = ' '.join(command)
+        self.command = ' '.join(raw_command)
         message = kwargs.get('status_message', self.command)
         callback = callback or self.generic_done
 
         if sublime.platform == 'osx':
-            command = ['source', '~/.bash_profile', '&&'] + command
+            raw_command = ['source', '~/.bash_profile', '&&'] + raw_command
 
         # Get p4-related variables from plugin preferences.
         settings = load_settings()
@@ -177,7 +177,7 @@ class PerforceCommand(object):
         if self.verbose:
             display_message(message)
 
-        thread = CommandThread(command,
+        thread = CommandThread(raw_command,
             functools.partial(self.check_output, callback), **kwargs)
         thread.start()
         ThreadProgress(thread, message)
@@ -214,7 +214,7 @@ class PerforceCommand(object):
             self.command,
             wrap(PERFORCE_P4_OUTPUT_START_MESSAGE),
             output,
-            wrap(PERFORCE_P4_OUTPUT_END_MESSAGE)
+            wrap(PERFORCE_P4_OUTPUT_END_MESSAGE),
         ))
 
     def generic_done(self, output):
@@ -371,6 +371,7 @@ class PerforceDiffCommand(PerforceTextCommand):
         if PERFORCE_P4_DIFF_HEADER_RE.match(result):
             self.panel('No output')
         else:
+            # TODO: mark new/removed lines
             self.scratch(result, title='Perforce Diff')
 
 
