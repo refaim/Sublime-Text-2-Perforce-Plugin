@@ -165,7 +165,7 @@ class PerforceCommand(object):
         if sublime.platform == 'osx':
             raw_command = ['source', '~/.bash_profile', '&&'] + raw_command
 
-        # Get p4-related variables from plugin preferences.
+        # Get p4 environment variables from plugin preferences.
         settings = load_settings()
         environ = os.environ
         for name in PERFORCE_ENVIRONMENT_VARIABLES:
@@ -173,7 +173,7 @@ class PerforceCommand(object):
             if value:
                 environ[name] = value
 
-        # Override enviroment variables with values from plugin preferences.
+        # And put them into the environment.
         if 'env' in kwargs:
             kwargs['env'].update(environ)
         else:
@@ -225,6 +225,7 @@ class PerforceCommand(object):
         ))
 
     def generic_done(self, output):
+        # TODO: implement
         pass
 
     def _output_to_view(self, output_file, output, clear=False,
@@ -273,12 +274,8 @@ class PerforceGenericCommand(PerforceCommand):
             callback=functools.partial(parse, return_callback))
 
     def get_current_user(self, return_callback):
-
-        def get_value(callback, info_dict):
-            callback(info_dict['user_name'])
-
         self.p4info(
-            return_callback=functools.partial(get_value, return_callback))
+            return_callback=lambda info: return_callback(info['user_name']))
 
     def get_pending_changelists(self, return_callback):
 
@@ -486,7 +483,7 @@ class PerforceListCheckedOutFilesCommand(PerforceWindowCommand):
         current = self.changelists.pop()
         self.run_command(['opened', '-c', current['number']],
             callback=functools.partial(self.process_extracted, current),
-            allowed_errors=PERFORCE_P4_NO_OPENED_FILES_ERROR)
+            allowed_errors=[PERFORCE_P4_NO_OPENED_FILES_ERROR])
 
     def process_extracted(self, changelist, output):
         print output.splitlines()
