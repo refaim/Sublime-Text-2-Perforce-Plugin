@@ -189,8 +189,7 @@ class PerforceCommand(object):
             cleaned = []
             for line in output.splitlines()[:-1]:  # skip line 'exit: <number>'
                 if any(line.startswith(prefix) for prefix in PERFORCE_P4_OUTPUT_PREFIXES):
-                    prefix, _, message = line.partition(':')
-                    message = message.lstrip()
+                    prefix, _, message = line.partition(': ')
                     p4_failed = (prefix == PERFORCE_P4_ERROR_PREFIX and
                         message not in self.allowed_errors)
                     cleaned.append(message)
@@ -261,8 +260,8 @@ class PerforceGenericCommand(PerforceCommand):
         def parse(callback, output):
             result = {}
             for line in output.splitlines():
-                key, _, value = line.partition(':')
-                result[key.replace(' ', '_').lower()] = value.strip()
+                key, _, value = line.partition(': ')
+                result[key.replace(' ', '_').lower()] = value
             callback(result)
 
         self.run_command(['info'],
