@@ -368,7 +368,9 @@ class PerforceDiffCommand(PerforceTextCommand):
         self.check_depot_file(callback=self.check_passed)
 
     def check_passed(self, filename):
-        self.run_command(['diff', '-du', filename], callback=self.diff_done)
+        settings = load_settings()
+        unified = '-du' if settings.get('perforce_show_unified_diffs') else ''
+        self.run_command(['diff', unified, filename], callback=self.diff_done)
 
     def diff_done(self, result):
         # TODO: show diff in output panel
