@@ -1,4 +1,3 @@
-# TODO: add option to show N context lines in diff
 # TODO: show all errors in panel
 # TODO: comment all methods
 # TODO: justify changelist numbers in 'submit' command
@@ -369,7 +368,7 @@ class PerforceDiffCommand(PerforceTextCommand):
         self.check_depot_file(callback=self.check_passed)
 
     def check_passed(self, filename):
-        self.run_command(['diff', filename], callback=self.diff_done)
+        self.run_command(['diff', '-du', filename], callback=self.diff_done)
 
     def diff_done(self, result):
         # TODO: show diff in output panel
