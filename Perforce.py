@@ -314,10 +314,13 @@ class PerforceGenericCommand(PerforceCommand):
     def is_under_client_root(self, candidate, callback):
 
         def check(root):
+            normalize = lambda path: os.path.normcase(os.path.normpath(path))
+
             # Function os.path.commonprefix doesn't parse paths,
             # need to normalize paths case and separators before call.
-            normalize = lambda path: os.path.normcase(os.path.normpath(path))
-            prefix = os.path.commonprefix(map(normalize, (candidate, root)))
+            path, root = map(normalize, (candidate, root))
+            prefix = os.path.commonprefix((path, root))
+
             # Due to lack of the os.path.samefile on Python 2.x for Windows
             # we should compare paths directly.
             callback(root == prefix)
