@@ -1,7 +1,7 @@
-# TODO: comment file sections
 # TODO: rename return_callback to callback?
 # TODO: show all errors in panel
 # TODO: comment all methods
+# TODO: justify changelist numbers in 'submit' command
 
 # Written by Eric Martel (emartel@gmail.com / www.ericmartel.com)
 
