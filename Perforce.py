@@ -257,15 +257,14 @@ class PerforceCommand(object):
 class PerforceGenericCommand(PerforceCommand):
     def p4info(self, return_callback):
 
-        def parse(callback, output):
+        def parse(output):
             result = {}
             for line in output.splitlines():
                 key, _, value = line.partition(': ')
                 result[key.replace(' ', '_').lower()] = value
-            callback(result)
+            return_callback(result)
 
-        self.run_command(['info'],
-            callback=functools.partial(parse, return_callback))
+        self.run_command(['info'], callback=parse)
 
     def get_current_user(self, return_callback):
         self.p4info(
@@ -297,7 +296,7 @@ class PerforceGenericCommand(PerforceCommand):
 
     def get_client_root(self, return_callback):
 
-        def get_value(callback, info_dict):
+        def get_value(info_dict):
             client_root = info_dict.get('client_root', None)
             if client_root is None:
                 # TODO: show in panel or edit client in ST2
@@ -305,15 +304,19 @@ class PerforceGenericCommand(PerforceCommand):
                     "Perforce: Please configure clientspec. Launching 'p4 client'...")
                 self.run_command(['client'])
             else:
-                callback(os.path.normpath(client_root))
+                return_callback(os.path.normpath(client_root))
 
-        self.p4info(
-            return_callback=functools.partial(get_value, return_callback))
+        self.p4info(return_callback=get_value)
 
     def is_under_client_root(self, candidate, return_callback):
 
         def check(root):
-            prefix = os.path.commonprefix([os.path.normpath(candidate), root])
+            # Function os.path.commonprefix doesn't parse paths,
+            # need to normalize paths case and separators before call.
+            normalize = lambda path: os.path.normcase(os.path.normpath(path))
+            prefix = os.path.commonprefix(map(normalize, (candidate, root)))
+            # Due to lack of the os.path.samefile on Python 2.x for Windows
+            # we should compare paths directly.
             return_callback(root == prefix)
 
         self.get_client_root(return_callback=check)
