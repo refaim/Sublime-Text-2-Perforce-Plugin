@@ -1,4 +1,4 @@
-# TODO: rename return_callback to callback?
+# TODO: add option to show N context lines in diff
 # TODO: show all errors in panel
 # TODO: comment all methods
 # TODO: justify changelist numbers in 'submit' command
@@ -260,22 +260,21 @@ class PerforceCommand(object):
 
 
 class PerforceGenericCommand(PerforceCommand):
-    def p4info(self, return_callback):
+    def p4info(self, callback):
 
         def parse(output):
             result = {}
             for line in output.splitlines():
                 key, _, value = line.partition(': ')
                 result[key.replace(' ', '_').lower()] = value
-            return_callback(result)
+            callback(result)
 
         self.run_command(['info'], callback=parse)
 
-    def get_current_user(self, return_callback):
-        self.p4info(
-            return_callback=lambda info: return_callback(info['user_name']))
+    def get_current_user(self, callback):
+        self.p4info(callback=lambda info: callback(info['user_name']))
 
-    def get_pending_changelists(self, return_callback):
+    def get_pending_changelists(self, callback):
 
         def get_raw_changes(username):
 
@@ -292,14 +291,14 @@ class PerforceGenericCommand(PerforceCommand):
 
                     result.append(data)
 
-                return_callback(result)
+                callback(result)
 
             self.run_command(['changes', '-s', 'pending', '-u', username],
                  callback=parse)
 
-        self.get_current_user(return_callback=get_raw_changes)
+        self.get_current_user(callback=get_raw_changes)
 
-    def get_client_root(self, return_callback):
+    def get_client_root(self, callback):
 
         def get_value(info_dict):
             client_root = info_dict.get('client_root', None)
@@ -309,11 +308,11 @@ class PerforceGenericCommand(PerforceCommand):
                     "Perforce: Please configure clientspec. Launching 'p4 client'...")
                 self.run_command(['client'])
             else:
-                return_callback(os.path.normpath(client_root))
+                callback(os.path.normpath(client_root))
 
-        self.p4info(return_callback=get_value)
+        self.p4info(callback=get_value)
 
-    def is_under_client_root(self, candidate, return_callback):
+    def is_under_client_root(self, candidate, callback):
 
         def check(root):
             # Function os.path.commonprefix doesn't parse paths,
@@ -322,21 +321,21 @@ class PerforceGenericCommand(PerforceCommand):
             prefix = os.path.commonprefix(map(normalize, (candidate, root)))
             # Due to lack of the os.path.samefile on Python 2.x for Windows
             # we should compare paths directly.
-            return_callback(root == prefix)
+            callback(root == prefix)
 
-        self.get_client_root(return_callback=check)
+        self.get_client_root(callback=check)
 
-    def check_depot_file(self, return_callback):  # TODO: rename method
+    def check_depot_file(self, callback):  # TODO: rename method
         def root_check_done(filename, is_in_depot):
             if is_in_depot:
-                return_callback(filename)
+                callback(filename)
             else:
                 display_message('File is not under the client root')
 
         filename = self.active_view().file_name()
         if filename:
             self.is_under_client_root(filename,
-                return_callback=functools.partial(root_check_done, filename))
+                callback=functools.partial(root_check_done, filename))
         else:
             display_message('View does not contain a file')
 
@@ -359,7 +358,7 @@ class PerforceTextCommand(PerforceGenericCommand, sublime_plugin.TextCommand):
 
 class PerforceAddCommand(PerforceTextCommand):
     def run(self, edit):
-        self.check_depot_file(return_callback=self.check_passed)
+        self.check_depot_file(callback=self.check_passed)
 
     def check_passed(self, filename):
         self.run_command(['add', filename], verbose=True)
@@ -367,7 +366,7 @@ class PerforceAddCommand(PerforceTextCommand):
 
 class PerforceDiffCommand(PerforceTextCommand):
     def run(self, edit):
-        self.check_depot_file(return_callback=self.check_passed)
+        self.check_depot_file(callback=self.check_passed)
 
     def check_passed(self, filename):
         self.run_command(['diff', filename], callback=self.diff_done)
@@ -417,7 +416,7 @@ class PerforceCreateChangelistCommand(PerforceWindowCommand):
 
 class PerforceDeleteCommand(PerforceTextCommand):
     def run(self, edit):
-        self.check_depot_file(return_callback=self.check_passed)
+        self.check_depot_file(callback=self.check_passed)
 
     def check_passed(self, filename):
         self.run_command(['delete', filename],
@@ -434,7 +433,7 @@ class PerforceDeleteCommand(PerforceTextCommand):
 
 class PerforceCheckoutCommand(PerforceTextCommand):
     def run(self, edit):
-        self.check_depot_file(return_callback=self.check_passed)
+        self.check_depot_file(callback=self.check_passed)
 
     def check_passed(self, filename):
         if is_writable(filename):
@@ -451,7 +450,7 @@ class PerforceCheckoutCommand(PerforceTextCommand):
 
 class PerforceSubmitCommand(PerforceWindowCommand):
     def run(self):
-        self.get_pending_changelists(return_callback=self.changelists_recieved)
+        self.get_pending_changelists(callback=self.changelists_recieved)
 
     def changelists_recieved(self, changelists):
         if changelists:
@@ -475,7 +474,7 @@ class PerforceSubmitCommand(PerforceWindowCommand):
 
 class PerforceListCheckedOutFilesCommand(PerforceWindowCommand):
     def run(self):
-        self.get_pending_changelists(return_callback=self.changelists_recieved)
+        self.get_pending_changelists(callback=self.changelists_recieved)
 
     def changelists_recieved(self, changelists):
         default_changelist = {
