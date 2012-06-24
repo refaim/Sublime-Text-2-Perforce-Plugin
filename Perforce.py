@@ -26,6 +26,7 @@
 import sublime
 import sublime_plugin
 
+import errno
 import functools
 import json
 import os
@@ -36,6 +37,9 @@ import threading
 import unittest
 
 # Plugin Settings are located in 'perforce.sublime-settings' make a copy in the User folder to keep changes
+
+# CreateProcess creation flag, Windows only.
+CREATE_PROCESS_CREATE_NO_WINDOW = 0x08000000
 
 # Executed at startup to store the path of the plugin... necessary to open files relative to the plugin
 perforceplugin_dir = os.getcwdu()
@@ -105,7 +109,7 @@ class ThreadProgress(object):
         if not self.thread.is_alive():
             # TODO: eventually this message overwrite other
             # significant messages set from main thread.
-            sublime.status_message(self.message)
+            # sublime.status_message(self.message)
             return
 
         before = i % self.size
@@ -130,20 +134,25 @@ class CommandThread(threading.Thread):
         self.cwd = kwargs['cwd']
 
     def run(self):
-        # Workaround for http://bugs.python.org/issue8557
-        shell = sublime.platform() == 'windows'
-
-        process = subprocess.Popen(self.command,
-            stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-            stdin=subprocess.PIPE, cwd=self.cwd, env=self.env,
-            shell=shell, universal_newlines=True)
-        output = process.communicate(self.stdin)[0] or ''
-        main_thread(self.on_done, output, process.returncode)
+        # Do not create new console window. Windows only.
+        creationflags = CREATE_PROCESS_CREATE_NO_WINDOW
+        try:
+            process = subprocess.Popen(self.command,
+                stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                stdin=subprocess.PIPE, cwd=self.cwd, env=self.env,
+                universal_newlines=True, creationflags=creationflags)
+            output = process.communicate(self.stdin)[0] or ''
+            main_thread(self.on_done, output, process.returncode)
+        except WindowsError, ex:
+            if ex.errno == errno.ENOENT:
+                message = 'Please add p4.exe to your PATH'
+            else:
+                message = ex.strerror
+            main_thread(sublime.error_message, message)
 
 
 class PerforceCommand(object):
     def run_command(self, command, callback=None, **kwargs):
-        # TODO: what if p4 is not in path?
         raw_command = ['p4', '-s'] + command
         self.command = ' '.join(raw_command)
         message = kwargs.get('status_message', self.command)
