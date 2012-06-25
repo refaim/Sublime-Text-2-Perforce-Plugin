@@ -386,7 +386,10 @@ class PerforceDiffCommand(PerforceTextCommand):
 
     def diff_done(self, result):
         # TODO: show diff in output panel
-        if PERFORCE_P4_DIFF_HEADER_RE.match(result):
+        settings = load_settings()
+        splitted = result.splitlines()
+        empty_diff_len = 1 + int(bool(settings.get('perforce_show_unified_diffs')))
+        if len(splitted) == empty_diff_len:
             self.panel('No output')
         else:
             # TODO: mark new/removed lines
