@@ -1,4 +1,3 @@
-# TODO: show all errors in panel
 # TODO: comment all methods
 # TODO: justify changelist numbers in 'submit' command
 
@@ -230,24 +229,17 @@ class PerforceCommand(object):
             output = '\n'.join(cleaned)
 
         if p4_failed or retcode != 0:
-            self._print_p4_output(output)
-            main_thread(sublime.status_message,
-                'Something went wrong, see console for details')
+            self.panel(self._wrap_p4_output(output))
         else:
             if self.verbose:
-                self._print_p4_output(output)
+                self.panel(self._wrap_p4_output(output))
             callback(output)
 
-    def _print_p4_output(self, output):
+    def _wrap_p4_output(self, output):
 
-        def wrap(message, length=80):
-            return (' %s ' % message).center(length, '-')
-
-        print '\n' + '\n'.join((
+        return '\n'.join((
             self.command,
-            wrap(PERFORCE_P4_OUTPUT_START_MESSAGE),
             output,
-            wrap(PERFORCE_P4_OUTPUT_END_MESSAGE),
         ))
 
     def generic_done(self, output):
