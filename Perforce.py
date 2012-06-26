@@ -30,6 +30,7 @@ import errno
 import functools
 import json
 import os
+import pipes
 import re
 import subprocess
 import tempfile
@@ -146,8 +147,22 @@ class CommandThread(threading.Thread):
         self.cwd = kwargs['cwd']
 
     def run(self):
-        # Do not create new console window. Windows only.
-        creationflags = CREATE_PROCESS_CREATE_NO_WINDOW
+        if sublime.platform() == 'windows':
+            # Do not create new console window
+            creationflags = CREATE_PROCESS_CREATE_NO_WINDOW
+        else:
+            creationflags = 0
+
+        if sublime.platform() in ('linux', 'osx'):
+            # Options for current shell interpreter:
+            # '-l': make it act as if it had been invoked as a login shell
+            # (call 'source' for /etc/profile and ~/.profile
+            # when starting, particularly).
+            # '-c': read command from the next operand.
+            command = [os.environ['SHELL'], '-l', '-c']
+            command.append(' '.join(pipes.quote(arg) for arg in self.command))
+            self.command = command
+
         try:
             process = subprocess.Popen(self.command,
                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
@@ -155,9 +170,9 @@ class CommandThread(threading.Thread):
                 universal_newlines=True, creationflags=creationflags)
             output = process.communicate(self.stdin)[0] or ''
             main_thread(self.on_done, output, process.returncode)
-        except WindowsError, ex:
+        except OSError, ex:
             if ex.errno == errno.ENOENT:
-                message = 'Please add p4.exe to your PATH'
+                message = 'Please add p4 to your PATH'
             else:
                 message = ex.strerror
             main_thread(sublime.error_message, message)
@@ -175,9 +190,6 @@ class PerforceCommand(object):
         # If cwd is not passed, use directory of the current file.
         kwargs.setdefault('cwd',
             os.path.dirname(self.active_view().file_name()))
-
-        if sublime.platform == 'osx':
-            raw_command = ['source', '~/.bash_profile', '&&'] + raw_command
 
         # Get p4 environment variables from plugin preferences.
         settings = load_settings()
