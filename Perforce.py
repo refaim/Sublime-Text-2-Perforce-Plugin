@@ -288,7 +288,8 @@ class PerforceCommand(object):
     def input_panel(self, caption, initial, **kwargs):
         for callback in ('on_done', 'on_change', 'on_cancel'):
             kwargs.setdefault(callback, None)
-        self.active_window().show_input_panel(caption, initial, **kwargs)
+        self.active_window().show_input_panel(caption, initial,
+            kwargs['on_done'], kwargs['on_change'], kwargs['on_cancel'])
 
 
 class PerforceGenericCommand(PerforceCommand):
@@ -427,7 +428,8 @@ class PerforceDiffCommand(PerforceTextCommand):
 
 class PerforceCreateChangelistCommand(PerforceWindowCommand):
     def run(self):
-        self.input_panel('Changelist Description', '', self.description_entered)
+        self.input_panel('Changelist Description', '',
+            on_done=self.description_entered)
 
     def description_entered(self, description):
         # Get default changelist specification.
