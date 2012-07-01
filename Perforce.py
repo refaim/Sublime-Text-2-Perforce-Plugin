@@ -380,6 +380,23 @@ class PerforceWindowCommand(PerforceGenericCommand, sublime_plugin.WindowCommand
     def active_window(self):
         return self.window
 
+    def show_pending_changelists(self, callback):
+
+        def on_pick(picked):
+            if picked != -1:
+                callback(self.changelists[picked])
+
+        def changelists_recieved(changelists):
+            if changelists:
+                self.changelists = changelists
+                format = '%(number)s - %(description)s'
+                self.quick_panel([(format % cl) for cl in changelists],
+                    on_pick)
+            else:
+                self.panel('There are no pending changelists')
+
+        self.get_pending_changelists(callback=changelists_recieved)
+
 
 class PerforceTextCommand(PerforceGenericCommand, sublime_plugin.TextCommand):
     def active_view(self):
@@ -490,22 +507,11 @@ class PerforceCheckoutCommand(PerforceTextCommand):
 
 class PerforceSubmitCommand(PerforceWindowCommand):
     def run(self):
-        self.get_pending_changelists(callback=self.changelists_recieved)
+        self.show_pending_changelists(callback=self.on_pick)
 
-    def changelists_recieved(self, changelists):
-        if changelists:
-            self.changelists = changelists
-            format = '%(number)s - %(description)s'
-            self.quick_panel([(format % cl) for cl in changelists],
-                self.on_pick)
-        else:
-            self.panel('There are no pending changelists')
-
-    def on_pick(self, picked):
-        if picked != -1:
-            number = self.changelists[picked]['number']
-            self.run_command(['submit', '-c', number],
-                callback=self.submit_done)
+    def on_pick(self, changelist):
+        self.run_command(['submit', '-c', changelist['number']],
+            callback=self.submit_done)
 
     def submit_done(self, result):
         # TODO: handle 'No files to submit' in check_output()
