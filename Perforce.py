@@ -437,8 +437,9 @@ class PerforceCreateChangelistCommand(PerforceWindowCommand):
             if not line.startswith(' '):
                 line = ' ' + line
             buffer_.append(line)
-        # TODO: use linesep from settings?
-        user_description = '\n'.join(buffer_)
+
+        separator = load_settings().get('perforce_end_line_separator')
+        user_description = separator.join(buffer_)
 
         # Replace the default description on entered by user
         # and remove all files from the new changelist.
