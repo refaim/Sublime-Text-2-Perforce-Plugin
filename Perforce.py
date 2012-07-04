@@ -1031,31 +1031,6 @@ class PerforceAddLineToChangelistDescriptionCommand(sublime_plugin.WindowCommand
     def run(self):
         AddLineToChangelistDescriptionThread(self.window).start()
 
-class PerforceLogoutCommand(sublime_plugin.WindowCommand):
-    def run(self):
-        try:
-            command = ConstructCommand("p4 set P4PASSWD=")
-            p = subprocess.Popen(command, stdin=subprocess.PIPE,stdout=subprocess.PIPE, stderr=subprocess.PIPE, cwd=global_folder, shell=True)
-            p.communicate()
-        except ValueError:
-            pass
-
-class PerforceLoginCommand(sublime_plugin.WindowCommand):
-    def run(self):
-        self.window.show_input_panel("Enter Perforce Password", "", self.on_done, None, None)
-
-    def on_done(self, password):
-        try:
-            command = ConstructCommand("p4 logout")
-            p = subprocess.Popen(command, stdin=subprocess.PIPE,stdout=subprocess.PIPE, stderr=subprocess.PIPE, cwd=global_folder, shell=True)
-            p.communicate()
-            #unset var
-            command = ConstructCommand("p4 set P4PASSWD=" + password)
-            p = subprocess.Popen(command, stdin=subprocess.PIPE,stdout=subprocess.PIPE, stderr=subprocess.PIPE, cwd=global_folder, shell=True)
-            p.communicate()
-        except ValueError:
-            pass
-
 class PerforceUnshelveClCommand(sublime_plugin.WindowCommand):
     def run(self):
         try:
@@ -1129,6 +1104,23 @@ class ShelveClCommand(threading.Thread):
                 resultchangelists.insert(0, "Changelist " + changelistlinesplit[1] + " - " + ' '.join(changelistlinesplit[7:]))
 
         return resultchangelists
+
+
+class PerforceLogoutCommand(PerforceWindowCommand):
+    def run(self):
+        self.run_command(['set', 'P4PASSWD='])
+
+
+class PerforceLoginCommand(PerforceWindowCommand):
+    def run(self):
+        self.input_panel('Enter Perforce Password', on_done=self.on_enter)
+
+    def on_enter(self, password):
+        self.run_command(['logout'],
+            callback=functools.partial(self.on_logout, password))
+
+    def on_logout(self, password, stdout):
+        self.run_command(['set', 'P4PASSWD=%s' % password])
 
 
 class PerforceTestCase(unittest.TestCase):
