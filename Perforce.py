@@ -387,6 +387,12 @@ class PerforceGenericCommand(PerforceCommand):
         else:
             display_message('View does not contain a file')
 
+    def dummy_changelist(self, name):
+        return {
+            'number': name,
+            'description': '<no description>',
+        }
+
 
 class PerforceWindowCommand(PerforceGenericCommand, sublime_plugin.WindowCommand):
     def active_view(self):
@@ -539,11 +545,7 @@ class PerforceListCheckedOutFilesCommand(PerforceWindowCommand):
             current_workspace_only=True)
 
     def changelists_recieved(self, changelists):
-        default_changelist = {
-            'number': 'default',
-            'description': '<no description>'
-        }
-        changelists.append(default_changelist)
+        changelists.append(self.dummy_changelist('default'))
         self.changelists = changelists
         self.files = []
         self.get_client_root(callback=self.prepare_extraction)
@@ -560,6 +562,7 @@ class PerforceListCheckedOutFilesCommand(PerforceWindowCommand):
             allowed_errors=[PERFORCE_P4_NO_OPENED_FILES_ERROR])
 
     def process_extracted(self, changelist, output):
+        print (output,)
         self.format = '%(filename)s\n%(path)s\nCL %(change)s %(description)s'
         for match in PERFORCE_P4_OPENED_FILE_RE.finditer(output):
             gd = match.groupdict()
@@ -630,6 +633,111 @@ class PerforceRenameCommand(PerforceWindowCommand):
         self.active_window().run_command('close')
         self.active_window().open_file(self.newname)
 
+
+class PerforceMoveCurrentFileToChangelistCommand(PerforceWindowCommand):
+    def run(self):
+        self.check_depot_file(callback=self.check_passed)
+
+    # Override parent method to add 'New' and 'Default' options.
+    def get_pending_changelists(self, callback):
+        def add_special_cases(changelists):
+            self.changelists = \
+                map(self.dummy_changelist, ('New', 'Default')) + changelists
+            callback(self.changelists)
+
+        super(PerforceWindowCommand, self).get_pending_changelists(
+            callback=add_special_cases)
+
+    def check_passed(self, filename):
+        self.show_pending_changelists(callback=self.on_pick)
+
+    def on_pick(self, picked):
+        pass
+
+
+'''class ListChangelistsAndMoveFileThread(threading.Thread):
+    def __init__(self, window):
+        self.window = window
+        self.view = window.active_view()
+        threading.Thread.__init__(self)
+
+    def MakeChangelistsList(self):
+        success, rawchangelists = GetPendingChangelists();
+
+        resultchangelists = ['New', 'Default'];
+
+        if(success):
+            changelists = rawchangelists.splitlines()
+
+            # for each line, extract the change
+            for changelistline in changelists:
+                changelistlinesplit = changelistline.split(' ')
+
+                # Insert at two because we receive the changelist in the opposite order and want to keep new and default on top
+                resultchangelists.insert(2, "Changelist " + changelistlinesplit[1] + " - " + ' '.join(changelistlinesplit[7:]))
+
+        return resultchangelists
+
+    def run(self):
+        self.changelists_list = self.MakeChangelistsList()
+
+        def show_quick_panel():
+            if not self.changelists_list:
+                sublime.error_message(__name__ + ': There are no changelists to list.')
+                return
+            self.window.show_quick_panel(self.changelists_list, self.on_done)
+
+        sublime.set_timeout(show_quick_panel, 10)
+
+    def on_done(self, picked):
+        if picked == -1:
+            return
+        changelistlist = self.changelists_list[picked].split(' ')
+
+        def move_file():
+            changelist = 'Default'
+            if(len(changelistlist) > 1): # Numbered changelist
+                changelist = changelistlist[1]
+            else:
+                changelist = changelistlist[0]
+
+            if(changelist == 'New'): # Special Case
+                self.window.show_input_panel('Changelist Description', '', self.on_description_done, self.on_description_change, self.on_description_cancel)
+            else:
+                success, message = MoveFileToChangelist(self.view.file_name(), changelist.lower())
+                LogResults(success, message);
+
+        sublime.set_timeout(move_file, 10)
+
+    def on_description_done(self, input):
+        success, message = CreateChangelist(input)
+        if(success == 1):
+            # Extract the changelist name from the message
+            changelist = message.split(' ')[1]
+            # Move the file
+            success, message = MoveFileToChangelist(self.view.file_name(), changelist)
+
+        LogResults(success, message)
+
+    def on_description_change(self, input):
+        pass
+
+    def on_description_cancel(self):
+        pass
+
+# Move Current File to Changelist
+def MoveFileToChangelist(in_filename, in_changelist):
+    folder_name, filename = os.path.split(in_filename)
+
+    command = ConstructCommand('p4 reopen -c ' + in_changelist + ' "' + filename + '"')
+    p = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, cwd=global_folder, shell=True)
+    result, err = p.communicate()
+
+    if(err):
+        return 0, err
+
+    return 1, result
+'''
 
 def IsFileInDepot(in_folder, in_filename):
     isUnderClientRoot = IsFolderUnderClientRoot(in_folder);
@@ -891,100 +999,6 @@ class PerforceSelectGraphicalDiffApplicationCommand(sublime_plugin.WindowCommand
         settings.set('perforce_selectedgraphicaldiffapp_command', entry['diffcommand'])
         sublime.save_settings('Perforce.sublime-settings')
 
-# Move Current File to Changelist
-def MoveFileToChangelist(in_filename, in_changelist):
-    folder_name, filename = os.path.split(in_filename)
-
-    command = ConstructCommand('p4 reopen -c ' + in_changelist + ' "' + filename + '"')
-    p = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, cwd=global_folder, shell=True)
-    result, err = p.communicate()
-
-    if(err):
-        return 0, err
-
-    return 1, result
-
-class ListChangelistsAndMoveFileThread(threading.Thread):
-    def __init__(self, window):
-        self.window = window
-        self.view = window.active_view()
-        threading.Thread.__init__(self)
-
-    def MakeChangelistsList(self):
-        success, rawchangelists = GetPendingChangelists();
-
-        resultchangelists = ['New', 'Default'];
-
-        if(success):
-            changelists = rawchangelists.splitlines()
-
-            # for each line, extract the change
-            for changelistline in changelists:
-                changelistlinesplit = changelistline.split(' ')
-
-                # Insert at two because we receive the changelist in the opposite order and want to keep new and default on top
-                resultchangelists.insert(2, "Changelist " + changelistlinesplit[1] + " - " + ' '.join(changelistlinesplit[7:]))
-
-        return resultchangelists
-
-    def run(self):
-        self.changelists_list = self.MakeChangelistsList()
-
-        def show_quick_panel():
-            if not self.changelists_list:
-                sublime.error_message(__name__ + ': There are no changelists to list.')
-                return
-            self.window.show_quick_panel(self.changelists_list, self.on_done)
-
-        sublime.set_timeout(show_quick_panel, 10)
-
-    def on_done(self, picked):
-        if picked == -1:
-            return
-        changelistlist = self.changelists_list[picked].split(' ')
-
-        def move_file():
-            changelist = 'Default'
-            if(len(changelistlist) > 1): # Numbered changelist
-                changelist = changelistlist[1]
-            else:
-                changelist = changelistlist[0]
-
-            if(changelist == 'New'): # Special Case
-                self.window.show_input_panel('Changelist Description', '', self.on_description_done, self.on_description_change, self.on_description_cancel)
-            else:
-                success, message = MoveFileToChangelist(self.view.file_name(), changelist.lower())
-                LogResults(success, message);
-
-        sublime.set_timeout(move_file, 10)
-
-    def on_description_done(self, input):
-        success, message = CreateChangelist(input)
-        if(success == 1):
-            # Extract the changelist name from the message
-            changelist = message.split(' ')[1]
-            # Move the file
-            success, message = MoveFileToChangelist(self.view.file_name(), changelist)
-
-        LogResults(success, message)
-
-    def on_description_change(self, input):
-        pass
-
-    def on_description_cancel(self):
-        pass
-
-class PerforceMoveCurrentFileToChangelistCommand(sublime_plugin.WindowCommand):
-    def run(self):
-        # first, test if the file is under the client root
-        folder_name, filename = os.path.split(self.window.active_view().file_name())
-        isInDepot = IsFileInDepot(folder_name, filename)
-
-        if(isInDepot != 1):
-            WarnUser("File is not under the client root.")
-            return 0
-
-        ListChangelistsAndMoveFileThread(self.window).start()
 
 # Add Line to Changelist Description
 class AddLineToChangelistDescriptionThread(threading.Thread):
