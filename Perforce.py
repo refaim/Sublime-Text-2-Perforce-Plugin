@@ -57,6 +57,9 @@ PERFORCE_P4_OUTPUT_PREFIXES = (
     'text',
 )
 
+PERFORCE_P4_SERVER_VERSION_RE = re.compile(r'P4D/[^/]+/(?P<year>[\d\.]+).+')
+PERFORCE_P4_MOVE_COMMAND_ARRIVAL_VERSION = 2009.1
+
 PERFORCE_P4_DIFF_HEADER_RE = re.compile(r'^={4}.+={4}$')
 
 PERFORCE_P4_CHANGES_CL_RE = re.compile(
@@ -301,6 +304,18 @@ class PerforceGenericCommand(PerforceCommand):
 
     def get_client_name(self, callback):
         self.p4info(callback=lambda info: callback(info['client_name']))
+
+    def get_server_version(self, callback):
+
+        def extract(info):
+            match = PERFORCE_P4_SERVER_VERSION_RE.match(info['server_version'])
+            if not match:
+                # TODO: handle
+                pass
+            else:
+                callback(float(match.groupdict()['year']))
+
+        self.p4info(callback=extract)
 
     def get_pending_changelists(self, callback, current_workspace_only=False):
 
@@ -574,6 +589,48 @@ class PerforceListCheckedOutFilesCommand(PerforceWindowCommand):
             self.active_window().open_file(local_path)
 
 
+class PerforceRenameCommand(PerforceWindowCommand):
+    def run(self):
+        self.check_depot_file(callback=self.check_passed)
+
+    def check_passed(self, filename):
+        self.oldname = filename
+        self.input_panel('New File Name', self.oldname,
+            on_done=self.on_enter)
+
+    def on_enter(self, filename):
+        self.newname = filename
+        self.get_server_version(callback=self.check_server_version)
+
+    def check_server_version(self, version):
+        if version >= PERFORCE_P4_MOVE_COMMAND_ARRIVAL_VERSION:
+            self.move()
+        else:
+            self.integrate()
+
+    def move(self):
+        def on_checkout(stdout):
+            self.run_command(['move', self.oldname, self.newname],
+                callback=self.reopen)
+
+        self.run_command(['edit', self.oldname], callback=on_checkout)
+
+    def integrate(self):
+        def on_integrate(stdout):
+            self.run_command(['delete', self.oldname], callback=self.reopen)
+
+        # The -d flag enables integrations around deleted revisions.
+        # The -f flag forces the integration on all revisions.
+        # The -t flag propagates the source file's filetype to the target file.
+        self.run_command(
+            ['integrate', '-d', '-f', '-t', self.oldname, self.newname],
+            callback=on_integrate)
+
+    def reopen(self, stdout):
+        self.active_window().run_command('close')
+        self.active_window().open_file(self.newname)
+
+
 def IsFileInDepot(in_folder, in_filename):
     isUnderClientRoot = IsFolderUnderClientRoot(in_folder);
     if(os.path.isfile(os.path.join(in_folder, in_filename))): # file exists on disk, not being added
@@ -714,43 +771,6 @@ class PerforceAutoAdd(sublime_plugin.EventListener):
             success, message = Add(folder_name, filename)
             LogResults(success, message)
 
-# Rename section
-def Rename(in_filename, in_newname):
-    command = ConstructCommand('p4 integrate -d -t -Di -f "' + in_filename + '" "' + in_newname + '"')
-    p = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, cwd=global_folder, shell=True)
-    result, err = p.communicate()
-
-    if(err):
-        return 0, err.strip()
-
-    command = ConstructCommand('p4 delete "' + in_filename + '" "' + in_newname + '"')
-    p = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, cwd=global_folder, shell=True)
-    result, err = p.communicate()
-
-    if(not err):
-        return 1, result.strip()
-    else:
-        return 0, err.strip()
-
-class PerforceRenameCommand(sublime_plugin.WindowCommand):
-    def run(self):
-        # Get the description
-        self.window.show_input_panel('New File Name', self.window.active_view().file_name(),
-            self.on_done, self.on_change, self.on_cancel)
-
-    def on_done(self, input):
-        success, message = Rename(self.window.active_view().file_name(), input)
-        if(success):
-            self.window.run_command('close')
-            self.window.open_file(input)
-
-        LogResults(success, message)
-
-    def on_change(self, input):
-        pass
-
-    def on_cancel(self):
-        pass
 
 # Revert section
 def Revert(in_folder, in_filename):
