@@ -24,5 +24,9 @@
     // used only if Select Graphical Diff Application is not called
     "perforce_default_graphical_diff_command": "p4diff \"%depotfile_path\" \"%file_path\" -l \"%file_name in depot\" -e -1 4",
 
-    "perforce_show_unified_diffs": true
+    "perforce_show_unified_diffs": true,
+
+    "perforce_shelve_force_overwrite": false,
+
+    "perforce_unshelve_force_overwrite": true
 }

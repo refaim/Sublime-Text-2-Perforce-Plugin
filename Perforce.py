@@ -546,6 +546,26 @@ class PerforceSubmitCommand(PerforceChangelistCommand):
         self.panel(result)
 
 
+class Shelve(object):
+    def run(self):
+        self.show_pending_changelists(callback=self.do_action)
+
+    def maybe_force(self, setting):
+        return ['-f'] if load_settings().get(setting) else []
+
+
+class PerforceShelveClCommand(Shelve, PerforceChangelistCommand):
+    def do_action(self, changelist):
+        self.run_command(['shelve', '-c', changelist['number']] +
+            self.maybe_force('perforce_shelve_force_overwrite'))
+
+
+class PerforceUnshelveClCommand(Shelve, PerforceChangelistCommand):
+    def do_action(self, changelist):
+        self.run_command(['unshelve', '-s', changelist['number']] +
+            self.maybe_force('perforce_unshelve_force_overwrite'))
+
+
 class PerforceMoveCurrentFileToChangelistCommand(PerforceChangelistCommand):
     def run(self):
         self.check_depot_file(callback=self.check_passed)
@@ -1002,80 +1022,6 @@ class AddLineToChangelistDescriptionThread(threading.Thread):
 class PerforceAddLineToChangelistDescriptionCommand(sublime_plugin.WindowCommand):
     def run(self):
         AddLineToChangelistDescriptionThread(self.window).start()
-
-class PerforceUnshelveClCommand(sublime_plugin.WindowCommand):
-    def run(self):
-        try:
-            ShelveClCommand(self.window, False).start()
-        except:
-            WarnUser("Unknown Error, does the included P4 Version support Shelve?")
-            return -1
-class PerforceShelveClCommand(sublime_plugin.WindowCommand):
-    def run(self):
-        try:
-            ShelveClCommand(self.window, True).start()
-        except:
-            WarnUser("Unknown Error, does the included P4 Version support Shelve?")
-            return -1
-
-class ShelveClCommand(threading.Thread):
-    def __init__(self, window, shelve=True):
-        self.shelve = shelve
-        self.window = window
-        threading.Thread.__init__(self)
-
-    def run(self):
-        self.changelists_list = self.MakeChangelistsList()
-        def show_quick_panel():
-            if not self.changelists_list:
-                sublime.error_message(__name__ + ': There are no changelists to list.')
-                return
-            self.window.show_quick_panel(self.changelists_list, self.on_done)
-
-        sublime.set_timeout(show_quick_panel, 10)
-
-    def on_done(self, picked):
-        if picked == -1:
-            return
-        changelistlist = self.changelists_list[picked].split(' ')
-
-
-        changelist = 'Default'
-        if(len(changelistlist) > 1): # Numbered changelist
-            changelist = changelistlist[1]
-        else:
-            changelist = changelistlist[0]
-
-        print changelist
-
-
-        if self.shelve:
-            cmdString = "shelve -c" + changelist
-        else:
-            cmdString = "unshelve -s" + changelist + " -f"
-        command = ConstructCommand("p4 " + cmdString)
-        p = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, cwd=global_folder, shell=True)
-        result, err = p.communicate()
-        print result
-        if(err):
-            WarnUser("usererr " + err.strip())
-            return -1
-
-    def MakeChangelistsList(self):
-        success, rawchangelists = GetPendingChangelists();
-
-        resultchangelists = []
-
-        if(success):
-            changelists = rawchangelists.splitlines()
-
-            # for each line, extract the change
-            for changelistline in changelists:
-                changelistlinesplit = changelistline.split(' ')
-
-                resultchangelists.insert(0, "Changelist " + changelistlinesplit[1] + " - " + ' '.join(changelistlinesplit[7:]))
-
-        return resultchangelists
 
 
 class PerforceLogoutCommand(PerforceWindowCommand):
