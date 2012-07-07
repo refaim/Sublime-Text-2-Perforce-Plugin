@@ -81,6 +81,7 @@ PERFORCE_P4_OPENED_FILE_RE = re.compile(
         $
     ''', re.VERBOSE | re.MULTILINE)
 
+PERFORCE_P4_CREATED_CL_RE = re.compile(r'Change\s(?P<number>)\screated')
 
 PERFORCE_P4_CLIENT_ERROR_MESSAGE = 'Perforce client error'
 
@@ -401,23 +402,6 @@ class PerforceWindowCommand(PerforceGenericCommand, sublime_plugin.WindowCommand
     def active_window(self):
         return self.window
 
-    def show_pending_changelists(self, callback):
-
-        def on_pick(picked):
-            if picked != -1:
-                callback(self.changelists[picked])
-
-        def changelists_recieved(changelists):
-            if changelists:
-                self.changelists = changelists
-                format = '%(number)s - %(description)s'
-                self.quick_panel([(format % cl) for cl in changelists],
-                    on_pick)
-            else:
-                self.panel('There are no pending changelists')
-
-        self.get_pending_changelists(callback=changelists_recieved)
-
 
 class PerforceTextCommand(PerforceGenericCommand, sublime_plugin.TextCommand):
     def active_view(self):
@@ -433,63 +417,6 @@ class PerforceAddCommand(PerforceTextCommand):
 
     def check_passed(self, filename):
         self.run_command(['add', filename], verbose=True)
-
-
-class PerforceDiffCommand(PerforceTextCommand):
-    def run(self, edit):
-        self.check_depot_file(callback=self.check_passed)
-
-    def check_passed(self, filename):
-        settings = load_settings()
-        unified = '-du' if settings.get('perforce_show_unified_diffs') else ''
-        self.run_command(['diff', unified, filename], callback=self.diff_done)
-
-    def diff_done(self, result):
-        # TODO: show diff in output panel
-        settings = load_settings()
-        splitted = result.splitlines()
-        empty_diff_len = 1 + int(bool(settings.get('perforce_show_unified_diffs')))
-        if len(splitted) == empty_diff_len:
-            self.panel('No output')
-        else:
-            # TODO: mark new/removed lines
-            self.scratch(result, title='Perforce Diff')
-
-
-class PerforceCreateChangelistCommand(PerforceWindowCommand):
-    def run(self):
-        self.input_panel('Changelist Description', '',
-            on_done=self.description_entered)
-
-    def description_entered(self, description):
-        # Get default changelist specification.
-        self.run_command(['change', '-o'],
-            callback=functools.partial(self.specification_obtained, description))
-
-    def specification_obtained(self, user_description, result):
-        # According to Perforce Knowledge Base,
-        # all lines in the description must start with a space or tab.
-        # See http://kb.perforce.com/article/6 for details.
-        buffer_ = []
-        for line in user_description.splitlines():
-            if not line.startswith(' '):
-                line = ' ' + line
-            buffer_.append(line)
-
-        separator = load_settings().get('perforce_end_line_separator')
-        user_description = separator.join(buffer_)
-
-        # Replace the default description on entered by user
-        # and remove all files from the new changelist.
-        result = (result[:result.find(PERFORCE_DEFAULT_DESCRIPTION)] +
-            user_description)
-
-        # Create changelist.
-        self.run_command(['change', '-i'], stdin=result,
-            callback=self.on_created)
-
-    def on_created(self, result):
-        self.panel(result)
 
 
 class PerforceDeleteCommand(PerforceTextCommand):
@@ -526,7 +453,87 @@ class PerforceCheckoutCommand(PerforceTextCommand):
             self.panel(result)
 
 
-class PerforceSubmitCommand(PerforceWindowCommand):
+class PerforceDiffCommand(PerforceTextCommand):
+    def run(self, edit):
+        self.check_depot_file(callback=self.check_passed)
+
+    def check_passed(self, filename):
+        settings = load_settings()
+        unified = '-du' if settings.get('perforce_show_unified_diffs') else ''
+        self.run_command(['diff', unified, filename], callback=self.diff_done)
+
+    def diff_done(self, result):
+        # TODO: show diff in output panel
+        settings = load_settings()
+        splitted = result.splitlines()
+        empty_diff_len = 1 + int(bool(settings.get('perforce_show_unified_diffs')))
+        if len(splitted) == empty_diff_len:
+            self.panel('No output')
+        else:
+            # TODO: mark new/removed lines
+            self.scratch(result, title='Perforce Diff')
+
+
+class PerforceChangelistCommand(PerforceWindowCommand):
+    def show_pending_changelists(self, callback):
+
+        def on_pick(picked):
+            if picked != -1:
+                callback(self.changelists[picked])
+
+        def changelists_recieved(changelists):
+            if changelists:
+                self.changelists = changelists
+                format = '%(number)s - %(description)s'
+                self.quick_panel([(format % cl) for cl in changelists],
+                    on_pick)
+            else:
+                self.panel('There are no pending changelists')
+
+        self.get_pending_changelists(callback=changelists_recieved)
+
+    def create_changelist(self, callback):
+
+        def description_entered(description):
+            # Get default changelist specification.
+            self.run_command(['change', '-o'],
+                callback=functools.partial(specification_obtained, description))
+
+        def specification_obtained(user_description, result):
+            # According to Perforce Knowledge Base,
+            # all lines in the description must start with a space or tab.
+            # See http://kb.perforce.com/article/6 for details.
+            buffer_ = []
+            for line in user_description.splitlines():
+                if not line.startswith(' '):
+                    line = ' ' + line
+                buffer_.append(line)
+
+            separator = load_settings().get('perforce_end_line_separator')
+            user_description = separator.join(buffer_)
+
+            # Replace the default description on entered by user
+            # and remove all files from the new changelist.
+            result = (result[:result.find(PERFORCE_DEFAULT_DESCRIPTION)] +
+                user_description)
+
+            # Create changelist.
+            self.run_command(['change', '-i'], stdin=result,
+                callback=callback)
+
+        self.input_panel('Changelist Description', '',
+            on_done=description_entered)
+
+
+class PerforceCreateChangelistCommand(PerforceChangelistCommand):
+    def run(self):
+        self.create_changelist(callback=self.on_created)
+
+    def on_created(self, result):
+        self.panel(result)
+
+
+class PerforceSubmitCommand(PerforceChangelistCommand):
     def run(self):
         self.show_pending_changelists(callback=self.on_pick)
 
@@ -537,6 +544,42 @@ class PerforceSubmitCommand(PerforceWindowCommand):
     def submit_done(self, result):
         # TODO: handle 'No files to submit' in check_output()
         self.panel(result)
+
+
+class PerforceMoveCurrentFileToChangelistCommand(PerforceChangelistCommand):
+    def run(self):
+        self.check_depot_file(callback=self.check_passed)
+
+    # Override parent method to add 'New' and 'Default' options.
+    def get_pending_changelists(self, callback):
+        def add_special_cases(changelists):
+            special = map(self.dummy_changelist, ('New', 'Default'))
+            callback(special + changelists)
+
+        super(self.__class__, self).get_pending_changelists(
+            callback=add_special_cases)
+
+    def check_passed(self, filename):
+        self.filename = filename
+        self.show_pending_changelists(callback=self.on_pick)
+
+    def on_pick(self, changelist):
+        number = changelist['number']
+        if number == 'New':
+            self.create_changelist(callback=self.get_changelist_number)
+        else:
+            # Convert to lowercase due to capitalized 'Default' changelist name.
+            self.move(number.lower())
+
+    def get_changelist_number(self, output):
+        match = PERFORCE_P4_CREATED_CL_RE.search(output)
+        if match:
+            self.move(match.groupdict()['number'])
+        else:
+            self.panel('Error:\n%s' % output)
+
+    def move(self, number):
+        self.run_command(['reopen', '-c', number, self.filename])
 
 
 class PerforceListCheckedOutFilesCommand(PerforceWindowCommand):
@@ -633,111 +676,6 @@ class PerforceRenameCommand(PerforceWindowCommand):
         self.active_window().run_command('close')
         self.active_window().open_file(self.newname)
 
-
-class PerforceMoveCurrentFileToChangelistCommand(PerforceWindowCommand):
-    def run(self):
-        self.check_depot_file(callback=self.check_passed)
-
-    # Override parent method to add 'New' and 'Default' options.
-    def get_pending_changelists(self, callback):
-        def add_special_cases(changelists):
-            self.changelists = \
-                map(self.dummy_changelist, ('New', 'Default')) + changelists
-            callback(self.changelists)
-
-        super(PerforceWindowCommand, self).get_pending_changelists(
-            callback=add_special_cases)
-
-    def check_passed(self, filename):
-        self.show_pending_changelists(callback=self.on_pick)
-
-    def on_pick(self, picked):
-        pass
-
-
-'''class ListChangelistsAndMoveFileThread(threading.Thread):
-    def __init__(self, window):
-        self.window = window
-        self.view = window.active_view()
-        threading.Thread.__init__(self)
-
-    def MakeChangelistsList(self):
-        success, rawchangelists = GetPendingChangelists();
-
-        resultchangelists = ['New', 'Default'];
-
-        if(success):
-            changelists = rawchangelists.splitlines()
-
-            # for each line, extract the change
-            for changelistline in changelists:
-                changelistlinesplit = changelistline.split(' ')
-
-                # Insert at two because we receive the changelist in the opposite order and want to keep new and default on top
-                resultchangelists.insert(2, "Changelist " + changelistlinesplit[1] + " - " + ' '.join(changelistlinesplit[7:]))
-
-        return resultchangelists
-
-    def run(self):
-        self.changelists_list = self.MakeChangelistsList()
-
-        def show_quick_panel():
-            if not self.changelists_list:
-                sublime.error_message(__name__ + ': There are no changelists to list.')
-                return
-            self.window.show_quick_panel(self.changelists_list, self.on_done)
-
-        sublime.set_timeout(show_quick_panel, 10)
-
-    def on_done(self, picked):
-        if picked == -1:
-            return
-        changelistlist = self.changelists_list[picked].split(' ')
-
-        def move_file():
-            changelist = 'Default'
-            if(len(changelistlist) > 1): # Numbered changelist
-                changelist = changelistlist[1]
-            else:
-                changelist = changelistlist[0]
-
-            if(changelist == 'New'): # Special Case
-                self.window.show_input_panel('Changelist Description', '', self.on_description_done, self.on_description_change, self.on_description_cancel)
-            else:
-                success, message = MoveFileToChangelist(self.view.file_name(), changelist.lower())
-                LogResults(success, message);
-
-        sublime.set_timeout(move_file, 10)
-
-    def on_description_done(self, input):
-        success, message = CreateChangelist(input)
-        if(success == 1):
-            # Extract the changelist name from the message
-            changelist = message.split(' ')[1]
-            # Move the file
-            success, message = MoveFileToChangelist(self.view.file_name(), changelist)
-
-        LogResults(success, message)
-
-    def on_description_change(self, input):
-        pass
-
-    def on_description_cancel(self):
-        pass
-
-# Move Current File to Changelist
-def MoveFileToChangelist(in_filename, in_changelist):
-    folder_name, filename = os.path.split(in_filename)
-
-    command = ConstructCommand('p4 reopen -c ' + in_changelist + ' "' + filename + '"')
-    p = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, cwd=global_folder, shell=True)
-    result, err = p.communicate()
-
-    if(err):
-        return 0, err
-
-    return 1, result
-'''
 
 def IsFileInDepot(in_folder, in_filename):
     isUnderClientRoot = IsFolderUnderClientRoot(in_folder);
