@@ -34,7 +34,6 @@ import re
 import subprocess
 import tempfile
 import threading
-import unittest
 
 # Plugin Settings are located in 'perforce.sublime-settings' make a copy in the User folder to keep changes
 
@@ -625,7 +624,6 @@ class PerforceListCheckedOutFilesCommand(PerforceWindowCommand):
             allowed_errors=[PERFORCE_P4_NO_OPENED_FILES_ERROR])
 
     def process_extracted(self, changelist, output):
-        print (output,)
         self.format = '%(filename)s\n%(path)s\nCL %(change)s %(description)s'
         for match in PERFORCE_P4_OPENED_FILE_RE.finditer(output):
             gd = match.groupdict()
@@ -695,20 +693,6 @@ class PerforceRenameCommand(PerforceWindowCommand):
     def reopen(self, stdout):
         self.active_window().run_command('close')
         self.active_window().open_file(self.newname)
-
-
-def IsFileInDepot(in_folder, in_filename):
-    isUnderClientRoot = IsFolderUnderClientRoot(in_folder);
-    if(os.path.isfile(os.path.join(in_folder, in_filename))): # file exists on disk, not being added
-        if(isUnderClientRoot):
-            return 1
-        else:
-            return 0
-    else:
-        if(isUnderClientRoot):
-            return -1 # will be in the depot, it's being added
-        else:
-            return 0
 
 
 def AppendToChangelistDescription(changelist, input):
@@ -807,35 +791,6 @@ class PerforceAutoCheckout(sublime_plugin.EventListener):
         if(view.is_dirty()):
             success, message = Checkout(view.file_name())
             LogResults(success, message);
-
-
-class PerforceAutoAdd(sublime_plugin.EventListener):
-    preSaveIsFileInDepot = 0
-    def on_pre_save(self, view):
-        # file already exists, no need to add
-        if view.file_name() and os.path.isfile(view.file_name()):
-            return
-
-        global global_folder
-        global_folder, filename = os.path.split(view.file_name())
-
-        perforce_settings = sublime.load_settings('Perforce.sublime-settings')
-
-        self.preSaveIsFileInDepot = 0
-
-        # check if this part of the plugin is enabled
-        if(not perforce_settings.get('perforce_auto_add')):
-            WarnUser("Auto Add disabled")
-            return
-
-        folder_name, filename = os.path.split(view.file_name())
-        self.preSaveIsFileInDepot = IsFileInDepot(folder_name, filename)
-
-    def on_post_save(self, view):
-        if(self.preSaveIsFileInDepot == -1):
-            folder_name, filename = os.path.split(view.file_name())
-            success, message = Add(folder_name, filename)
-            LogResults(success, message)
 
 
 # Revert section
@@ -1041,18 +996,27 @@ class PerforceLoginCommand(PerforceWindowCommand):
         self.run_command(['set', 'P4PASSWD=%s' % password])
 
 
-class PerforceTestCase(unittest.TestCase):
-    def test_test(self):
-        def on_done(result):
-            print (result,)
+class PerforceEventListener(PerforceGenericCommand, sublime_plugin.EventListener):
+    def on_activated(self, view):
+        self.view = view
 
-        is_under_client_root('/home/roman/aslkdj', on_done)
+    def active_view(self):
+        return self.view
+
+    def active_window(self):
+        return self.view.window() or sublime.active_window()
 
 
-class PerforceRunUnitTests(sublime_plugin.WindowCommand):
-    def run(self):
-        tests = [
-            'test_test',
-        ]
-        suite = unittest.TestSuite(map(PerforceTestCase, tests))
-        unittest.TextTestRunner(verbosity=2).run(suite)
+class PerforceAutoAdd(PerforceEventListener):
+    def on_pre_save(self, view):
+        self.filename = view.file_name()
+        self.is_file_new = self.filename and not os.path.isfile(self.filename)
+
+    def on_post_save(self, view):
+        if self.is_file_new and load_settings().get('perforce_auto_add'):
+            self.is_under_client_root(self.filename,
+                callback=self.check_done)
+
+    def check_done(self, is_under):
+        if is_under:
+            self.run_command(['add', self.filename])
