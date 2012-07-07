@@ -1,5 +1,6 @@
 # TODO: comment all methods
 # TODO: justify changelist numbers in 'submit' command
+# TODO: display files from default changelist in 'list checked out files'
 
 # Written by Eric Martel (emartel@gmail.com / www.ericmartel.com)
 
@@ -150,7 +151,7 @@ class CommandThread(threading.Thread):
 
     def run(self):
         if sublime.platform() == 'windows':
-            # Do not create new console window
+            # Do not create new console window.
             creationflags = CREATE_PROCESS_CREATE_NO_WINDOW
         else:
             creationflags = 0
@@ -184,10 +185,11 @@ class PerforceCommand(object):
     def run_command(self, command, callback=None, **kwargs):
         raw_command = ['p4', '-s'] + command
         self.command = ' '.join(raw_command)
-        message = kwargs.get('status_message', self.command)
 
         self.allowed_errors = kwargs.get('allowed_errors', [])
         self.verbose = kwargs.get('verbose', False)
+        message = kwargs.get('status_message', self.command)
+        blocking = kwargs.get('blocking', False)
 
         # If cwd is not passed, use directory of the current file.
         kwargs.setdefault('cwd',
@@ -215,6 +217,8 @@ class PerforceCommand(object):
             functools.partial(self.check_output, callback), **kwargs)
         thread.start()
         ThreadProgress(thread, message)
+        if blocking:
+            thread.join()
 
     def check_output(self, callback, output, retcode):
         # Skip line with the p4 return code.
@@ -761,38 +765,6 @@ def LogResults(success, message):
     else:
         WarnUser(message);
 
-class PerforceAutoCheckout(sublime_plugin.EventListener):
-    def on_modified(self, view):
-        return
-        if(not view.file_name()):
-            return
-
-        if(IsFileWritable(view.file_name())):
-            return
-
-        perforce_settings = sublime.load_settings('Perforce.sublime-settings')
-
-        # check if this part of the plugin is enabled
-        if(not perforce_settings.get('perforce_auto_checkout') or not perforce_settings.get('perforce_auto_checkout_on_modified')):
-            return
-
-        if(view.is_dirty()):
-            success, message = Checkout(view.file_name())
-            LogResults(success, message);
-
-    def on_pre_save(self, view):
-        return
-        perforce_settings = sublime.load_settings('Perforce.sublime-settings')
-
-        # check if this part of the plugin is enabled
-        if(not perforce_settings.get('perforce_auto_checkout') or not perforce_settings.get('perforce_auto_checkout_on_save')):
-            return
-
-        if(view.is_dirty()):
-            success, message = Checkout(view.file_name())
-            LogResults(success, message);
-
-
 # Revert section
 def Revert(in_folder, in_filename):
     # revert the file
@@ -1020,3 +992,30 @@ class PerforceAutoAdd(PerforceEventListener):
     def check_done(self, is_under):
         if is_under:
             self.run_command(['add', self.filename])
+
+
+class PerforceAutoCheckout(PerforceEventListener):
+    def on_modified(self, view):
+        filename = view.file_name()
+        if filename and os.path.isfile(filename) and not is_writable(filename):
+            if view.is_dirty():
+                settings = load_settings()
+                if (settings.get('perforce_auto_checkout') and
+                    settings.get('perforce_auto_checkout_on_modified')
+                ):
+                    self.run_command(['edit', filename],
+                        callback=self.checkout_done)
+
+    def on_pre_save(self, view):
+        if view.is_dirty():
+            settings = load_settings()
+            if (settings.get('perforce_auto_checkout') and
+                settings.get('perforce_auto_checkout_on_save')
+            ):
+                self.run_command(['edit', view.file_name()],
+                    callback=self.checkout_done, blocking=True)
+
+    def checkout_done(self, result):
+        if not is_writable(self.active_view().file_name()):
+            # Can't checkout file for some reason.
+            self.panel(result)
