@@ -217,11 +217,14 @@ class PerforceCommand(object):
         ThreadProgress(thread, message)
 
     def check_output(self, callback, output, retcode):
-        p4_failed = output.startswith(PERFORCE_P4_CLIENT_ERROR_MESSAGE)
+        # Skip line with the p4 return code.
+        output = output.splitlines()[:-1]
+        # Check for client error presence.
+        p4_failed = output[0].startswith(PERFORCE_P4_CLIENT_ERROR_MESSAGE)
 
         if not p4_failed:
             cleaned = []
-            for line in output.splitlines()[:-1]:  # skip line 'exit: <number>'
+            for line in output:
                 if any(line.startswith(prefix) for prefix in PERFORCE_P4_OUTPUT_PREFIXES):
                     prefix, _, message = line.partition(': ')
                     p4_failed = (prefix == PERFORCE_P4_ERROR_PREFIX and
@@ -229,21 +232,18 @@ class PerforceCommand(object):
                     cleaned.append(message)
                 else:
                     cleaned.append(line)
-            output = '\n'.join(cleaned)
+            output = cleaned
 
+        output = '\n'.join(output)
         if p4_failed or retcode != 0:
-            self.panel(self._wrap_p4_output(output))
+            self.print_p4_output(output)
         else:
             if self.verbose:
-                self.panel(self._wrap_p4_output(output))
+                self.print_p4_output(output)
             callback(output)
 
-    def _wrap_p4_output(self, output):
-
-        return '\n'.join((
-            self.command,
-            output,
-        ))
+    def print_p4_output(self, output):
+        self.panel('\n'.join((self.command, output)))
 
     def generic_done(self, output):
         # TODO: implement
