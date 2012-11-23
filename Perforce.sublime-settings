@@ -1,8 +1,8 @@
 {
     // when true, checkout will occur depending on the modify/save settings
-    "perforce_auto_checkout": true,
+    "perforce_auto_checkout": false,
 
-    "perforce_auto_checkout_on_save": true,
+    "perforce_auto_checkout_on_save": false,
     "perforce_auto_checkout_on_modified": false,
 
     // when true, any file within the client spec
