@@ -475,11 +475,8 @@ class PerforceDeleteCommand(PerforceTextCommand):
 
 class PerforceCheckoutCommand(PerforceTextCommand):
     def check_passed(self, filename):
-        if is_writable(filename):
-            display_message('File is already writable')
-        else:
-            self.run_command(['edit', filename],
-                callback=functools.partial(self.checkout_done, filename))
+        self.run_command(['edit', filename],
+            callback=functools.partial(self.checkout_done, filename))
 
     def checkout_done(self, filename, result):
         if not is_writable(filename):
@@ -1011,7 +1008,7 @@ class PerforceAutoAdd(PerforceEventListener):
 class PerforceAutoCheckout(PerforceEventListener):
     def on_modified(self, view):
         filename = view.file_name()
-        if filename and os.path.isfile(filename) and not is_writable(filename):
+        if filename and os.path.isfile(filename):
             if view.is_dirty():
                 settings = load_settings()
                 if (settings.get('perforce_auto_checkout') and
