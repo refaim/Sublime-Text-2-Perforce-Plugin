@@ -407,6 +407,9 @@ class PerforceWindowCommand(PerforceGenericCommand, sublime_plugin.WindowCommand
 
 
 class PerforceTextCommand(PerforceGenericCommand, sublime_plugin.TextCommand):
+    def run(self, edit):
+        self.check_depot_file(callback=self.check_passed)
+
     def active_view(self):
         return self.view
 
@@ -415,17 +418,11 @@ class PerforceTextCommand(PerforceGenericCommand, sublime_plugin.TextCommand):
 
 
 class PerforceAddCommand(PerforceTextCommand):
-    def run(self, edit):
-        self.check_depot_file(callback=self.check_passed)
-
     def check_passed(self, filename):
         self.run_command(['add', filename], verbose=True)
 
 
 class PerforceDeleteCommand(PerforceTextCommand):
-    def run(self, edit):
-        self.check_depot_file(callback=self.check_passed)
-
     def check_passed(self, filename):
         self.run_command(['delete', filename],
             callback=functools.partial(self.delete_done, filename))
@@ -440,9 +437,6 @@ class PerforceDeleteCommand(PerforceTextCommand):
 
 
 class PerforceCheckoutCommand(PerforceTextCommand):
-    def run(self, edit):
-        self.check_depot_file(callback=self.check_passed)
-
     def check_passed(self, filename):
         if is_writable(filename):
             display_message('File is already writable')
