@@ -450,6 +450,11 @@ class PerforceCheckoutCommand(PerforceTextCommand):
             self.panel(result)
 
 
+class PerforceRevertCommand(PerforceTextCommand):
+    def check_passed(self, filename):
+        self.run_command(['revert', filename])
+
+
 class PerforceDiffCommand(PerforceTextCommand):
     def run(self, edit):
         self.check_depot_file(callback=self.check_passed)
@@ -758,28 +763,6 @@ def LogResults(success, message):
         print "Perforce: " + message
     else:
         WarnUser(message);
-
-# Revert section
-def Revert(in_folder, in_filename):
-    # revert the file
-    return PerforceCommandOnFile("revert", in_folder, in_filename);
-
-class PerforceRevertCommand(sublime_plugin.TextCommand):
-    def run_(self, args): # revert cannot be called when an Edit object exists, manually handle the run routine
-        if(self.view.file_name()):
-            folder_name, filename = os.path.split(self.view.file_name())
-
-            if(IsFileInDepot(folder_name, filename)):
-                success, message = Revert(folder_name, filename)
-                if(success): # the file was properly reverted, ask Sublime Text to refresh the view
-                    self.view.run_command('revert');
-            else:
-                success = 0
-                message = "File is not under the client root."
-
-            LogResults(success, message)
-        else:
-            WarnUser("View does not contain a file")
 
 # Graphical Diff With Depot section
 class GraphicalDiffThread(threading.Thread):
