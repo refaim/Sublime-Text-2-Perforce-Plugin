@@ -91,6 +91,14 @@ PERFORCE_P4_OUTPUT_END_MESSAGE = 'P4 OUTPUT END'
 PERFORCE_P4_NO_OPENED_FILES_ERROR = 'File(s) not opened on this client.'
 
 
+def cache_p4info(data=None):
+    if not hasattr(cache_p4info, 'data'):
+        cache_p4info.data = None
+    if data is not None:
+        cache_p4info.data = data
+    return cache_p4info.data
+
+
 def load_settings():
     return sublime.load_settings(PERFORCE_SETTINGS_PATH)
 
@@ -299,9 +307,14 @@ class PerforceGenericCommand(PerforceCommand):
             for line in output.splitlines():
                 key, _, value = line.partition(': ')
                 result[key.replace(' ', '_').lower()] = value
+            cache_p4info(result)
             callback(result)
 
-        self.run_command(['info'], callback=parse)
+        cached = cache_p4info()
+        if cached is None:
+            self.run_command(['info'], callback=parse)
+        elif load_settings().get('perforce_allow_p4info_caching'):
+            callback(cached)
 
     def get_current_user(self, callback):
         self.p4info(callback=lambda info: callback(info['user_name']))

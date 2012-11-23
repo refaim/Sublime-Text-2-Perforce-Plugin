@@ -28,5 +28,7 @@
 
     "perforce_shelve_force_overwrite": false,
 
-    "perforce_unshelve_force_overwrite": true
+    "perforce_unshelve_force_overwrite": true,
+
+    "perforce_allow_p4info_caching": true
 }
