@@ -86,6 +86,10 @@
                 ]
             },
             {
+                "caption": "Time-lapse View",
+                "command": "perforce_time_lapse_view"
+            },
+            {
                 "command": "perforce_logout",
                 "caption": "Logout"
             }

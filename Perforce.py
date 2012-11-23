@@ -152,10 +152,11 @@ class CommandThread(threading.Thread):
     def __init__(self, command, on_done, **kwargs):
         threading.Thread.__init__(self)
         self.command = command
-        self.on_done = on_done
+        self.on_done = on_done or (lambda x: x)
         self.stdin = kwargs.get('stdin', None)
         self.env = kwargs['env']
         self.cwd = kwargs['cwd']
+        self.wait = kwargs.get('wait', True)
 
     def run(self):
         if sublime.platform() == 'windows':
@@ -179,8 +180,9 @@ class CommandThread(threading.Thread):
                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                 stdin=subprocess.PIPE, cwd=self.cwd, env=self.env,
                 universal_newlines=True, creationflags=creationflags)
-            output = process.communicate(self.stdin)[0] or ''
-            main_thread(self.on_done, output, process.returncode)
+            if self.wait:
+                output = process.communicate(self.stdin)[0] or ''
+                main_thread(self.on_done, output, process.returncode)
         except OSError, ex:
             if ex.errno == errno.ENOENT:
                 message = 'Please add p4 to your PATH'
@@ -189,16 +191,8 @@ class CommandThread(threading.Thread):
             main_thread(sublime.error_message, message)
 
 
-class PerforceCommand(object):
-    def run_command(self, command, callback=None, **kwargs):
-        raw_command = ['p4', '-s'] + command
-        self.command = ' '.join(raw_command)
-
-        self.allowed_errors = kwargs.get('allowed_errors', [])
-        self.verbose = kwargs.get('verbose', False)
-        message = kwargs.get('status_message', self.command)
-        blocking = kwargs.get('blocking', False)
-
+class PerforceBaseCommand(object):
+    def setenv(self, **kwargs):
         # If cwd is not passed, use directory of the current file.
         kwargs.setdefault('cwd',
             os.path.dirname(self.active_view().file_name()))
@@ -216,17 +210,36 @@ class PerforceCommand(object):
             kwargs['env'].update(environ)
         else:
             kwargs['env'] = environ
+        return kwargs
 
-        if self.verbose:
-            display_message(message)
+    def shell_command(self, command, on_done, **kwargs):
+        kwargs = self.setenv(**kwargs)
 
-        callback = callback or self.generic_done
-        thread = CommandThread(raw_command,
-            functools.partial(self.check_output, callback), **kwargs)
+        blocking = kwargs.get('blocking', False)
+        message = kwargs.get('status_message', ' '.join(command))
+
+        thread = CommandThread(command, on_done, **kwargs)
         thread.start()
         ThreadProgress(thread, message)
         if blocking:
             thread.join()
+
+
+class PerforceCommand(PerforceBaseCommand):
+    def run_command(self, command, callback=None, **kwargs):
+        raw_command = ['p4', '-s'] + command
+        self.command = ' '.join(raw_command)
+
+        self.allowed_errors = kwargs.get('allowed_errors', [])
+        self.verbose = kwargs.get('verbose', False)
+        message = kwargs.get('status_message', self.command)
+
+        if self.verbose:
+            display_message(message)
+
+        on_done = functools.partial(self.check_output,
+            callback or self.generic_done)
+        self.shell_command(raw_command, on_done, **kwargs)
 
     def check_output(self, callback, output, retcode):
         # Skip line with the p4 return code.
@@ -428,6 +441,17 @@ class PerforceTextCommand(PerforceGenericCommand, sublime_plugin.TextCommand):
 
     def active_window(self):
         return self.view.window() or sublime.active_window()
+
+
+class PerforceGuiCommand(PerforceTextCommand, sublime_plugin.TextCommand):
+    def gui_command(self, command):
+        self.shell_command(['p4v', '-cmd'] + [' '.join(command)],
+            on_done=None, wait=False)
+
+
+class PerforceTimeLapseViewCommand(PerforceGuiCommand):
+    def check_passed(self, filename):
+        self.gui_command(['annotate', '-i', filename])
 
 
 class PerforceAddCommand(PerforceTextCommand):
